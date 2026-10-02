@@ -12,6 +12,5 @@ scripts/tshark_*.log
 *.pcap
 !scripts/client1_small.pcap
 
-# upstream TrafficGenerator git history (kept locally) and an accidental nested clone
+# upstream TrafficGenerator git history (kept locally)
 scripts/TrafficGenerator/.git-upstream/
-scripts/TrafficGenerator/src/script/TrafficGenerator/

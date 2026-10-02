@@ -9,6 +9,10 @@ from contextlib import contextmanager
 
 from mininet.cli import CLI
 
+# stop each client this many seconds after its last request: we only need the first packets
+# of every flow (size comes from the request), so huge flows need not finish. -1 = wait for all flows (writes FCT log)
+EARLY_EXIT_SEC = 30
+
 # app type by flow size, written as client config lines: app_mix <max_size> <w_bulk> <w_login> <w_stream>
 # clue = how much the app type tells about the size (0..1):
 #   0 -> every size bucket gets the same mix (app type says nothing about size)
@@ -129,7 +133,7 @@ def startClient(clientHosts, flowsPerPair, clientIndex, baseSeed):
   seed = baseSeed * 100 + clientIndex + 1  # never 0 (0 = time-based in client)
   print ('start flows from ' + clientHosts[clientIndex].name)
   print (clientHosts[clientIndex].name+ ' client flow generate current time' + time.strftime('%Y.%m.%d - %H:%M:%S'))
-  clientHosts[clientIndex].cmd ('TrafficGenerator/bin/client -b 900 -c TrafficGenerator/conf/client%s_config.txt -n %s -l flows_%s.txt -s %s -v > log_%s.txt' % (clientIndex, flowsPerPair, clientIndex, seed, clientIndex))
+  clientHosts[clientIndex].cmd ('TrafficGenerator/bin/client -b 900 -c TrafficGenerator/conf/client%s_config.txt -n %s -l flows_%s.txt -s %s %s -v > log_%s.txt' % (clientIndex, flowsPerPair, clientIndex, seed, '-e %d' % EARLY_EXIT_SEC if EARLY_EXIT_SEC >= 0 else '', clientIndex))
   print (clientHosts[clientIndex].name + ' seed %s' % seed)
 def merge_startClinet(args):
   startClient(*args)

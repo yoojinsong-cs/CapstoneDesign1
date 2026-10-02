@@ -21,6 +21,7 @@ char config_file_name[80] = {0};    /* configuration file */
 char dist_file_name[80] = {0};  /* flow size distribution file */
 char fct_log_name[80] = "flows.txt";    /* default log file */
 int seed = 0;   /* random seed */
+int early_exit_sec = -1;    /* -e: exit this many seconds after the last request is sent (-1: wait for all flows) */
 char result_script_name[80] = {0};  /* script file to parse final results */
 unsigned int usleep_overhead_us = 0;    /* usleep overhead in microsecond */
 struct timeval tv_start, tv_end;    /* start and end time of traffic */
@@ -169,6 +170,15 @@ int main(int argc, char *argv[])
     gettimeofday(&tv_start, NULL);
     run_requests();
 
+    /* every request is on the wire; give the last flows time to send their first packets, then stop */
+    if (early_exit_sec >= 0)
+    {
+        printf("All requests sent. Exit in %d s without waiting for flows to finish\n", early_exit_sec);
+        fflush(stdout);
+        sleep(early_exit_sec);
+        exit(EXIT_SUCCESS);
+    }
+
     /* close existing connections */
     printf("===========================================\n");
     printf("Exit connections\n");
@@ -210,6 +220,7 @@ void print_usage(char *program)
     printf("-l <file>       log file with flow completion times (default %s)\n", fct_log_name);
     printf("-s <seed>       seed to generate random numbers (default current time)\n");
     printf("-r <file>       python script to parse result files\n");
+    printf("-e <seconds>    exit <seconds> after the last request is sent, without waiting for flows to finish (no FCT log)\n");
     printf("-v              give more detailed output (verbose)\n");
     printf("-h              display help information\n");
 }
@@ -314,6 +325,20 @@ void read_args(int argc, char *argv[])
             else
             {
                 printf("Cannot read seed value\n");
+                print_usage(argv[0]);
+                exit(EXIT_FAILURE);
+            }
+        }
+        else if (strlen(argv[i]) == 2 && strcmp(argv[i], "-e") == 0)
+        {
+            if (i+1 < argc && atoi(argv[i+1]) >= 0)
+            {
+                early_exit_sec = atoi(argv[i+1]);
+                i += 2;
+            }
+            else
+            {
+                printf("Cannot read early exit seconds\n");
                 print_usage(argv[0]);
                 exit(EXIT_FAILURE);
             }

@@ -3,7 +3,7 @@ from mininet.cli import CLI
 
 from topoBuilder_lb import topoBuilder
 from ruleInstaller_lb import ruleInstaller
-from flowGenerator_parll import flowGenerator
+from flowGenerator_parll import flowGenerator, EARLY_EXIT_SEC
 
 if __name__ == "__main__":
 
@@ -42,7 +42,8 @@ if __name__ == "__main__":
     for k in range(1, client + 1):
         name = 'data/%s_VL2_clue%03d_%dflows_client%d' % (time.strftime('%m%d'), round(clue * 100), flowsPerPair, k)
         os.system('python3 pcap2csv.py /tmp/client%d.pcap 10 %d > %s.csv && python3 csv2html.py %s.csv' % (k, port, name, name))
-        os.system('cp flows_%d.txt %s_FCT.txt' % (k - 1, name))
+        if EARLY_EXIT_SEC < 0:  # the FCT log only exists when every flow ran to the end
+            os.system('cp flows_%d.txt %s_FCT.txt' % (k - 1, name))
         for ext in ('.csv', '.html', '_FCT.txt'):
             if os.path.exists(name + ext) and 'SUDO_UID' in os.environ:
                 os.chown(name + ext, int(os.environ['SUDO_UID']), int(os.environ['SUDO_GID']))

@@ -1,0 +1,17 @@
+# build / runtime output
+__pycache__/
+*.o
+scripts/TrafficGenerator/bin/
+scripts/TrafficGenerator/result/
+scripts/TrafficGenerator/conf/client[0-9]*_config.txt
+scripts/flows_*.txt
+scripts/log_*.txt
+scripts/tshark_*.log
+
+# captures are large; keep only the small sample
+*.pcap
+!scripts/client1_small.pcap
+
+# upstream TrafficGenerator git history (kept locally) and an accidental nested clone
+scripts/TrafficGenerator/.git-upstream/
+scripts/TrafficGenerator/src/script/TrafficGenerator/

@@ -1,6 +1,6 @@
 """Quick look at pcap2csv.py output: sanity checks + example flows per app type.
 
-usage: python3 inspect_flows.py data/app_n100_client1.csv [data/app_n100_client2.csv ...]
+usage: python3 inspect_flows.py data/1002_VL2_3apps_100flows_client1.csv [more CSVs ...]
 """
 import sys, csv, collections
 

@@ -9,7 +9,22 @@ from contextlib import contextmanager
 
 from mininet.cli import CLI
 
-def flowGenerator (network, port, flowsPerPair):
+# app type by flow size, written as client config lines: app_mix <max_size> <w_bulk> <w_login> <w_stream>
+# clue = how much the app type tells about the size (0..1):
+#   0 -> every size bucket gets the same mix (app type says nothing about size)
+#   1 -> small = login, medium = bulk, large (>= elephant) = stream (app type gives the answer away)
+SIZE_BUCKETS = [10000, 1000000, 4294967295]   # small <= 10 KB < medium <= 1 MB < large
+NEUTRAL = [1, 1, 1]                           # bulk, login, stream
+STRONG = [[0, 1, 0], [1, 0, 0], [0, 0, 1]]    # per bucket
+
+def appMixLines (clue):
+    lines = []
+    for bound, strong in zip(SIZE_BUCKETS, STRONG):
+        w = [round(1000 * ((1 - clue) * n / sum(NEUTRAL) + clue * s)) for n, s in zip(NEUTRAL, strong)]
+        lines.append('app_mix %d %d %d %d' % (bound, w[0], w[1], w[2]))
+    return lines
+
+def flowGenerator (network, port, flowsPerPair, clue):
     workDirectory = os.getcwd()
 
     allHosts = network.hosts
@@ -37,11 +52,7 @@ def flowGenerator (network, port, flowsPerPair):
         line = 'req_size_dist TrafficGenerator/conf/%s' % cdf
         configLines.append (line)
 
-        # app type by flow size: app_mix <max_size> <w_bulk> <w_login> <w_stream>
-        # overlapping on purpose (the clue is a tendency, not the answer); delete these to get the old all-bulk traffic
-        configLines += ['app_mix 10000 20 70 10',        # small: mostly login
-                        'app_mix 1000000 30 30 40',      # medium: mixed
-                        'app_mix 4294967295 60 5 35']    # large: mostly bulk/stream
+        configLines += appMixLines(clue)
 
         with open ('TrafficGenerator/conf/client%s_config.txt' % clientIndex, 'w') as configFile:
             for line in configLines:

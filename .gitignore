@@ -14,3 +14,6 @@ scripts/tshark_*.log
 
 # upstream TrafficGenerator git history (kept locally)
 scripts/TrafficGenerator/.git-upstream/
+
+# personal Claude Code settings
+.claude/settings.local.json

@@ -10,7 +10,7 @@ usage:
   python3 baseline.py                          F1 per clue level for every data/*_clue*_client1.csv
 The output is also saved: data/baseline_all.txt (no args) or <train name without _client1.csv>_baseline.txt.
 """
-import atexit, csv, glob, re, sys
+import atexit, csv, glob, re, sys, unicodedata
 
 ELEPHANT = 1_000_000
 
@@ -75,15 +75,40 @@ def test_f1(train, test, N):
     return score(apply([features(l, t, N) for _, l, t in test], N, rule), [r[0] for r in test]), rule
 
 
+NAMES = {  # feature -> how it reads in the report
+    'pkts_seen': '받은 패킷 수', 'bytes_seen': '받은 바이트', 'last_pkt_full': '마지막 패킷이 꽉 참',
+    'time_to_Nth': 'N번째 패킷까지 걸린 시간(초)', 'first_full': '첫 패킷이 꽉 참', 'first_gap': '첫-둘째 패킷 간격',
+}
+
+
+def describe(rule):
+    name, v, ge, gated = rule
+    value = '%.1fms' % (v * 1000) if name == 'first_gap' else '%g' % round(v, 4)
+    return '%s%s %s %s' % ('아직 보내는 중 & ' if gated else '', NAMES[name], '>=' if ge else '<=', value)
+
+
+def pad(text, width):
+    """Left-align to a screen width (Korean letters take two columns)."""
+    return text + ' ' * (width - sum(2 if unicodedata.east_asian_width(c) in 'WF' else 1 for c in text))
+
+
+def row(cells, widths):
+    print(' | '.join(pad(c, w) for c, w in zip(cells, widths)).rstrip())
+
+
 def sweep():
-    runs = sorted(glob.glob('data/*_clue*_client1.csv'))
-    print('clue | flows (elephants) train/test | test F1 at N=1   3   5   9')
+    runs = sorted(glob.glob('data/*_clue*_client1.csv'), key=lambda f: int(re.search(r'clue(\d+)', f).group(1)))
+    print('단서 강도별 F1 점수 (첫 N개 패킷만 보고 elephant 예측, 1에 가까울수록 잘 맞힘)')
+    print('학습 = client1, 시험 = client2. 괄호 = elephant 수. 무조건 elephant라고 찍으면 약 0.17\n')
+    widths = [9, 4, 4, 4, 4, 22]
+    row(['단서 강도', 'N=1', 'N=3', 'N=5', 'N=9', '흐름 수 학습 / 시험', '실험'], widths + [0])
+    print('-' * 90)
     for f in runs:
         train, test = load(f), load(f.replace('client1', 'client2'))
         f1s = ['%.2f' % test_f1(train, test, N)[0][2] for N in (1, 3, 5, 9)]
         clue = int(re.search(r'clue(\d+)', f).group(1)) / 100
-        print('%.2f | %d (%d) / %d (%d) | %s   <- %s' % (clue, len(train), sum(r[0] for r in train),
-              len(test), sum(r[0] for r in test), '  '.join(f1s), f.replace('_client1.csv', '')))
+        counts = '%d (%d) / %d (%d)' % (len(train), sum(r[0] for r in train), len(test), sum(r[0] for r in test))
+        row(['%.2f' % clue] + f1s + [counts, f.replace('_client1.csv', '')], widths + [0])
 
 
 class Tee:
@@ -106,11 +131,16 @@ if __name__ == '__main__':
         sweep()
         sys.exit()
     train, test = load(sys.argv[1]), load(sys.argv[2])
-    print('train %d flows (%d elephants) | test %d flows (%d elephants)' % (
+    print('실험: %s (학습) / %s (시험)' % (sys.argv[1], sys.argv[2]))
+    print('흐름 수: 학습 %d개 (elephant %d개), 시험 %d개 (elephant %d개)' % (
         len(train), sum(r[0] for r in train), len(test), sum(r[0] for r in test)))
-    print('always-guess-elephant F1 on test: %.2f\n' % score([True] * len(test), [r[0] for r in test])[2])
+    print('찍기 기준선 (전부 elephant라고 예측) F1: %.2f\n' % score([True] * len(test), [r[0] for r in test])[2])
+    print('정밀도 = elephant라고 한 것 중 진짜 비율, 재현율 = 진짜 elephant 중 잡아낸 비율, F1 = 둘을 합친 점수')
+    print('안 끝난 흐름 F1 = N개 패킷 뒤에도 아직 보내는 흐름만 따로 채점 (괄호 = 그 흐름 수)\n')
 
-    print('N | best rule (learned on train)                    | test precision recall  F1  | hard-only F1')
+    widths = [2, 6, 6, 4, 20]
+    row(['N', '정밀도', '재현율', 'F1', '안 끝난 흐름 F1', '학습 데이터로 고른 규칙'], widths + [0])
+    print('-' * 90)
     for N in range(1, 10):
         (p, r, f), rule = test_f1(train, test, N)
         Xte, yte = [features(l, t, N) for _, l, t in test], [r[0] for r in test]
@@ -118,6 +148,4 @@ if __name__ == '__main__':
         hard = [i for i, x in enumerate(Xte) if still_sending(x, N)]
         pred = apply(Xte, N, rule)
         hf = score([pred[i] for i in hard], [yte[i] for i in hard])[2]
-        name, v, ge, gated = rule
-        desc = '%s%s %s %s' % ('still sending & ' if gated else '', name, '>=' if ge else '<=', round(v, 4))
-        print('%d | %-48s | %.2f      %.2f  %.2f | %.2f (%d flows)' % (N, desc, p, r, f, hf, len(hard)))
+        row([str(N), '%.2f' % p, '%.2f' % r, '%.2f' % f, '%.2f (%d)' % (hf, len(hard)), describe(rule)], widths + [0])

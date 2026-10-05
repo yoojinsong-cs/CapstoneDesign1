@@ -8,7 +8,7 @@ label: elephant if size >= 1 MB.
 usage:
   python3 baseline.py <train.csv> <test.csv>   per-N table for one run
   python3 baseline.py                          F1 per clue level for every data/*_clue*_client1.csv
-The output is also saved: data/baseline_all.txt (no args) or <train name without _client1.csv>_baseline.txt.
+The output is also saved: data/baseline_all.txt (no args), <run>_baseline.txt, or <train run>_to_<test run>_baseline.txt.
 """
 import atexit, csv, glob, re, sys, unicodedata
 
@@ -125,7 +125,13 @@ class Tee:
 
 
 if __name__ == '__main__':
-    out = 'data/baseline_all.txt' if len(sys.argv) < 3 else re.sub(r'(_client1)?\.csv$', '', sys.argv[1]) + '_baseline.txt'
+    run = lambda f: re.sub(r'(_client\d)?\.csv$', '', f)
+    if len(sys.argv) < 3:
+        out = 'data/baseline_all.txt'
+    elif run(sys.argv[1]) == run(sys.argv[2]):
+        out = run(sys.argv[1]) + '_baseline.txt'
+    else:  # cross test: train on one run, test on another
+        out = run(sys.argv[1]) + '_to_' + run(sys.argv[2]).split('/')[-1] + '_baseline.txt'
     sys.stdout = Tee(out)
     atexit.register(lambda: sys.__stdout__.write('\nsaved %s\n' % out))
     if len(sys.argv) < 3:

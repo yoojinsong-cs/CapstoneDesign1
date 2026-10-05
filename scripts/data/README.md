@@ -13,3 +13,5 @@
 | `.html` | 같은 CSV를 브라우저로 보기 좋게 (`csv2html.py`) |
 | `_FCT.txt` | 트래픽 생성기가 남긴 흐름별 완료 시간 기록 (크기, 걸린 시간 µs, DSCP, rate, goodput) |
 | 10/05 | `1005_VL2_clue<NNN>_1000flows_*` | 앱 3종, 단서 강도 0 / 0.5 / 0.6 / 0.7 / 0.8 / 1 (clue000 = 0, clue050 = 0.5 ...), 흐름 1000개, 마지막 요청 후 30초에 종료 (FCT 기록 없음) |
+
+`baseline.py` 결과도 여기 저장됨: `baseline_all.txt` (단서 강도별 점수표), `<실험이름>_baseline.txt` (실험 하나의 N별 상세 결과).

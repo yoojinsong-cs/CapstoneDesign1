@@ -1,0 +1,13 @@
+train 1000 flows (90 elephants) | test 1000 flows (100 elephants)
+always-guess-elephant F1 on test: 0.18
+
+N | best rule (learned on train)                    | test precision recall  F1  | hard-only F1
+1 | bytes_seen >= 930                                | 0.12      0.36  0.18 | 0.13 (132 flows)
+2 | still sending & first_gap >= 0.0262              | 0.60      0.78  0.68 | 0.68 (361 flows)
+3 | still sending & first_gap >= 0.0262              | 0.67      0.77  0.72 | 0.76 (235 flows)
+4 | still sending & first_gap >= 0.0262              | 0.69      0.78  0.73 | 0.73 (299 flows)
+5 | still sending & first_gap >= 0.0262              | 0.70      0.78  0.74 | 0.74 (277 flows)
+6 | still sending & first_gap >= 0.0262              | 0.73      0.78  0.75 | 0.75 (249 flows)
+7 | still sending & bytes_seen <= 9872               | 0.63      0.87  0.73 | 0.73 (232 flows)
+8 | still sending & bytes_seen <= 11320              | 0.69      0.86  0.76 | 0.77 (219 flows)
+9 | still sending & bytes_seen <= 12768              | 0.70      0.86  0.77 | 0.78 (216 flows)

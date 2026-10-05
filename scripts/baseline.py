@@ -8,8 +8,9 @@ label: elephant if size >= 1 MB.
 usage:
   python3 baseline.py <train.csv> <test.csv>   per-N table for one run
   python3 baseline.py                          F1 per clue level for every data/*_clue*_client1.csv
+The output is also saved: data/baseline_all.txt (no args) or <train name without _client1.csv>_baseline.txt.
 """
-import csv, glob, re, sys
+import atexit, csv, glob, re, sys
 
 ELEPHANT = 1_000_000
 
@@ -85,7 +86,22 @@ def sweep():
               len(test), sum(r[0] for r in test), '  '.join(f1s), f.replace('_client1.csv', '')))
 
 
+class Tee:
+    """stdout that also writes to a file."""
+    def __init__(self, path):
+        self.path, self.f = path, open(path, 'w')
+    def write(self, s):
+        sys.__stdout__.write(s)
+        self.f.write(s)
+    def flush(self):
+        sys.__stdout__.flush()
+        self.f.flush()
+
+
 if __name__ == '__main__':
+    out = 'data/baseline_all.txt' if len(sys.argv) < 3 else re.sub(r'(_client1)?\.csv$', '', sys.argv[1]) + '_baseline.txt'
+    sys.stdout = Tee(out)
+    atexit.register(lambda: sys.__stdout__.write('\nsaved %s\n' % out))
     if len(sys.argv) < 3:
         sweep()
         sys.exit()

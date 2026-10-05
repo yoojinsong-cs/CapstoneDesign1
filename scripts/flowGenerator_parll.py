@@ -28,7 +28,7 @@ def appMixLines (clue):
         lines.append('app_mix %d %d %d %d' % (bound, w[0], w[1], w[2]))
     return lines
 
-def flowGenerator (network, port, flowsPerPair, clue):
+def flowGenerator (network, port, flowsPerPair, clue, dist='VL2'):
     workDirectory = os.getcwd()
 
     allHosts = network.hosts
@@ -52,7 +52,7 @@ def flowGenerator (network, port, flowsPerPair, clue):
         line = 'server %s %s' % (serverIp, port)
         configLines.append (line)
 
-        cdf = 'VL2_CDF.txt' # change this if you want to use a different CDF file.
+        cdf = '%s_CDF.txt' % dist  # flow size distribution: TrafficGenerator/conf/<dist>_CDF.txt
         line = 'req_size_dist TrafficGenerator/conf/%s' % cdf
         configLines.append (line)
 

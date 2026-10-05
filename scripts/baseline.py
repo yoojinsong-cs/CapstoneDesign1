@@ -97,18 +97,19 @@ def row(cells, widths):
 
 
 def sweep():
-    runs = sorted(glob.glob('data/*_clue*_client1.csv'), key=lambda f: int(re.search(r'clue(\d+)', f).group(1)))
+    runs = sorted(glob.glob('data/*_clue*_client1.csv'), key=lambda f: (f.split('_')[1], int(re.search(r'clue(\d+)', f).group(1))))  # by dist, then clue
     print('단서 강도별 F1 점수 (첫 N개 패킷만 보고 elephant 예측, 1에 가까울수록 잘 맞힘)')
-    print('학습 = client1, 시험 = client2. 괄호 = elephant 수. 무조건 elephant라고 찍으면 약 0.17\n')
-    widths = [9, 4, 4, 4, 4, 22]
-    row(['단서 강도', 'N=1', 'N=3', 'N=5', 'N=9', '흐름 수 학습 / 시험', '실험'], widths + [0])
+    print('학습 = client1, 시험 = client2. 괄호 = elephant 수. 찍기 = 무조건 elephant라고 예측했을 때의 F1 (기준선)\n')
+    widths = [9, 4, 4, 4, 4, 4, 22]
+    row(['단서 강도', '찍기', 'N=1', 'N=3', 'N=5', 'N=9', '흐름 수 학습 / 시험', '실험'], widths + [0])
     print('-' * 90)
     for f in runs:
         train, test = load(f), load(f.replace('client1', 'client2'))
         f1s = ['%.2f' % test_f1(train, test, N)[0][2] for N in (1, 3, 5, 9)]
         clue = int(re.search(r'clue(\d+)', f).group(1)) / 100
         counts = '%d (%d) / %d (%d)' % (len(train), sum(r[0] for r in train), len(test), sum(r[0] for r in test))
-        row(['%.2f' % clue] + f1s + [counts, f.replace('_client1.csv', '')], widths + [0])
+        guess = '%.2f' % score([True] * len(test), [r[0] for r in test])[2]
+        row(['%.2f' % clue, guess] + f1s + [counts, f.replace('_client1.csv', '')], widths + [0])
 
 
 class Tee:

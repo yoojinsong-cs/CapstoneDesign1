@@ -38,8 +38,6 @@ void print_cdf(struct cdf_table *table);
 double avg_cdf(struct cdf_table *table);
 
 /* Generate a random value based on CDF distribution */
-/* uniform random number in [min, max) */
-double rand_range(double min, double max);
 double gen_random_cdf(struct cdf_table *table);
 
 #endif

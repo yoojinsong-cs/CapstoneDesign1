@@ -17,18 +17,15 @@ ELEPHANT = 1_000_000
 def load(pattern):
     rows = []
     for f in sorted(glob.glob(pattern)):
-        prev = ([], [])  # the previous flow on this client (rows are in request order)
         for r in csv.DictReader(open(f)):
             lens = [int(r['len%d' % k]) for k in range(2, 11) if r['len%d' % k]]
             ts = [float(r['t%d' % k]) for k in range(2, 11) if r['t%d' % k]]
-            rows.append((int(r['size']) >= ELEPHANT, lens, ts, prev))
-            prev = (lens, ts)
+            rows.append((int(r['size']) >= ELEPHANT, lens, ts))
     return rows
 
 
-def features(lens, ts, prev, N):
-    """What a switch could know after watching up to N data packets (of this flow and the previous one)."""
-    plens = prev[0][:N]
+def features(lens, ts, N):
+    """What a switch could know after watching up to N data packets."""
     lens, ts = lens[:N], ts[:N]
     return {
         'pkts_seen': len(lens),                      # fewer than N -> flow already ended
@@ -37,7 +34,6 @@ def features(lens, ts, prev, N):
         'time_to_Nth': ts[-1] if len(ts) == N else 99.0,        # how long N packets took
         'first_full': int(bool(lens) and lens[0] >= 1448),      # bulk starts full, login/stream start small
         'first_gap': ts[1] - ts[0] if len(ts) >= 2 else 0.0,    # stream pauses after its header
-        'prev_still_sending': int(len(plens) == N and plens[-1] >= 1448),  # habit: was the previous flow big too?
     }
 
 
@@ -74,8 +70,8 @@ def best_rule(X, y, N):
 
 
 def test_f1(train, test, N):
-    rule = best_rule([features(*r[1:], N) for r in train], [r[0] for r in train], N)
-    return score(apply([features(*r[1:], N) for r in test], N, rule), [r[0] for r in test]), rule
+    rule = best_rule([features(l, t, N) for _, l, t in train], [r[0] for r in train], N)
+    return score(apply([features(l, t, N) for _, l, t in test], N, rule), [r[0] for r in test]), rule
 
 
 def sweep():
@@ -101,7 +97,7 @@ if __name__ == '__main__':
     print('N | best rule (learned on train)                    | test precision recall  F1  | hard-only F1')
     for N in range(1, 10):
         (p, r, f), rule = test_f1(train, test, N)
-        Xte, yte = [features(*r[1:], N) for r in test], [r[0] for r in test]
+        Xte, yte = [features(l, t, N) for _, l, t in test], [r[0] for r in test]
         # "hard" = flows still sending after N packets (can't be told apart by 'it already ended')
         hard = [i for i, x in enumerate(Xte) if still_sending(x, N)]
         pred = apply(Xte, N, rule)

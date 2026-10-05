@@ -28,7 +28,7 @@ def appMixLines (clue):
         lines.append('app_mix %d %d %d %d' % (bound, w[0], w[1], w[2]))
     return lines
 
-def flowGenerator (network, port, flowsPerPair, clue, burst=1, history=0):
+def flowGenerator (network, port, flowsPerPair, clue):
     workDirectory = os.getcwd()
 
     allHosts = network.hosts
@@ -57,8 +57,6 @@ def flowGenerator (network, port, flowsPerPair, clue, burst=1, history=0):
         configLines.append (line)
 
         configLines += appMixLines(clue)
-        configLines.append('burst %g' % burst)      # mean flows per burst (1 = even Poisson arrivals)
-        configLines.append('history %g' % history)  # chance a flow keeps the previous flow's size bucket
 
         with open ('TrafficGenerator/conf/client%s_config.txt' % clientIndex, 'w') as configFile:
             for line in configLines:

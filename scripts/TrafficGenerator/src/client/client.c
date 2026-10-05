@@ -51,6 +51,15 @@ unsigned int num_app_mix = 0;
 unsigned int app_mix[MAX_APP_MIX][4];
 unsigned int app_values[3] = {TG_APP_BULK, TG_APP_LOGIN, TG_APP_STREAM};
 
+/* "burst <mean_flows_per_burst>": requests come in bursts (ON/OFF) instead of evenly (Poisson).
+   Inside a burst the gap averages period/TG_BURST_GAP_DIV; the gap before a new burst is longer,
+   so the average rate (load) is unchanged. 1 = original Poisson arrivals. */
+#define TG_BURST_GAP_DIV 10
+double burst_len = 1;
+/* "history <0..1>": chance that a flow stays in the same app_mix size row as the previous flow
+   (a host keeps doing the same kind of job). The overall size distribution is unchanged. 0 = independent. */
+double history = 0;
+
 double load = -1;   /* network load (Mbps) */
 unsigned int req_total_num = 0; /* total number of requests to generate */
 unsigned int req_total_time = 0;    /* total time to generate requests (in seconds) */
@@ -75,6 +84,8 @@ void print_usage(char *program);
 void read_args(int argc, char *argv[]);
 /* read configuration file */
 void read_config(char *file_name);
+/* index of the app_mix row a flow size falls in */
+unsigned int app_mix_row(unsigned int size);
 /* set request variables */
 void set_req_variables();
 /* receive traffic from established connections */
@@ -555,6 +566,22 @@ void read_config(char *file_name)
                 printf("App mix: size <= %u -> bulk %u, login %u, stream %u\n", r[0], r[1], r[2], r[3]);
             num_app_mix++;
         }
+        else if (!strcmp(key, "burst"))
+        {
+            if (sscanf(line, "%s %lf", key, &burst_len) != 2 || burst_len < 1)
+            {
+                cleanup();
+                error("Invalid burst line (mean flows per burst >= 1)");
+            }
+        }
+        else if (!strcmp(key, "history"))
+        {
+            if (sscanf(line, "%s %lf", key, &history) != 2 || history < 0 || history > 1)
+            {
+                cleanup();
+                error("Invalid history line (0..1)");
+            }
+        }
     }
 
     fclose(fd);
@@ -581,6 +608,15 @@ void read_config(char *file_name)
             printf("Rate: %uMbps, Prob: %u\n", rate_value[0], rate_prob[0]);
     }
 
+}
+
+/* index of the app_mix row a flow size falls in (sizes above every row use the last row) */
+unsigned int app_mix_row(unsigned int size)
+{
+    unsigned int j = 0;
+    while (j + 1 < num_app_mix && size > app_mix[j][0])
+        j++;
+    return j;
 }
 
 /* set request variables */
@@ -631,18 +667,26 @@ void set_req_variables()
     for (i = 0; i < req_total_num; i++)
     {
         req_size[i] = gen_random_cdf(req_size_dist);    /* flow size */
+        /* habit: redraw until the size falls in the previous flow's row (rejection sampling keeps the CDF shape) */
+        if (i > 0 && num_app_mix > 0 && rand_range(0, 1) < history)
+            while (app_mix_row(req_size[i]) != app_mix_row(req_size[i - 1]))
+                req_size[i] = gen_random_cdf(req_size_dist);
         req_server_id[i] = rand() % num_server; /* server ID */
         server_req_count[req_server_id[i]]++;   /* per-server request number */
         req_dscp[i] = gen_value_weight(dscp_value, dscp_prob, num_dscp, dscp_prob_total);    /* flow DSCP */
         req_rate[i] = gen_value_weight(rate_value, rate_prob, num_rate, rate_prob_total);   /* flow sending rate */
         if (num_app_mix > 0)    /* app type, drawn from the row that matches the flow size */
         {
-            unsigned int j = 0;
-            while (j + 1 < num_app_mix && req_size[i] > app_mix[j][0])
-                j++;
+            unsigned int j = app_mix_row(req_size[i]);
             req_app[i] = gen_value_weight(app_values, &app_mix[j][1], 3, app_mix[j][1] + app_mix[j][2] + app_mix[j][3]);
         }
-        req_sleep_us[i] = poission_gen_interval(1.0/period_us); /* sleep interval based on poission process */
+        /* sleep interval: Poisson; with bursts, short gap inside a burst, long gap (prob 1/burst_len) before a new one */
+        if (rand_range(0, 1) < 1 / burst_len)
+            req_sleep_us[i] = poission_gen_interval(1.0 / (burst_len * period_us - (burst_len - 1) * period_us / TG_BURST_GAP_DIV));
+        else
+            req_sleep_us[i] = poission_gen_interval(1.0 * TG_BURST_GAP_DIV / period_us);
+        if (verbose_mode)
+            printf("Request %u: size %u, app %u, sleep %u us\n", i + 1, req_size[i], req_app[i], req_sleep_us[i]);
 
         req_size_total += req_size[i];
         req_interval_total += req_sleep_us[i];

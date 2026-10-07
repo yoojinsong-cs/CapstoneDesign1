@@ -1,0 +1,4 @@
+# This lab's downloaded source, builds, captures and generated CSVs stay local.
+.deps/
+results/
+__pycache__/

@@ -47,7 +47,7 @@ sudo python3 main.py <server#> <client#> <serverEdge#> <clientEdge#> <paths#> <p
 | `port#` | TrafficGenerator 서버 포트 |
 | `flowsPerPair#` | 클라이언트-서버 쌍당 플로우 수 |
 
-TrafficGenerator 원본 방식대로 CDF에서 흐름 크기를 뽑고, 모든 흐름을 연속 bulk 전송합니다. 요청 메타데이터는 16바이트이며 앱 패턴이나 `app_mix`는 사용하지 않습니다.
+TrafficGenerator 원본 방식대로 `DCTCP_CDF.txt`에서 흐름 크기를 뽑고, 모든 흐름을 연속 bulk 전송합니다. 요청 메타데이터는 16바이트이며 앱 패턴이나 `app_mix`는 사용하지 않습니다.
 
 ### 예시
 

@@ -33,7 +33,7 @@ def flowGenerator (network, port, flowsPerPair):
         line = 'server %s %s' % (serverIp, port)
         configLines.append (line)
 
-        cdf = 'VL2_CDF.txt' # change this if you want to use a different CDF file.
+        cdf = 'DCTCP_CDF.txt' # change this if you want to use a different CDF file.
         line = 'req_size_dist TrafficGenerator/conf/%s' % cdf
         configLines.append (line)
 

@@ -324,6 +324,41 @@ unsigned int gen_value_weight(unsigned int *vals, unsigned int *weights, unsigne
     return vals[len - 1];
 }
 
+/* app type mix: "app_mix <max_size> <w_bulk> <w_login> <w_stream>", rows in ascending max_size.
+   A flow takes the first row with size <= max_size (sizes above every row use the last row).
+   No rows -> every flow is bulk (original behavior). */
+#define MAX_APP_MIX 16
+static unsigned int num_app_mix = 0;
+static unsigned int app_mix[MAX_APP_MIX][4];
+static unsigned int app_values[3] = {TG_APP_BULK, TG_APP_LOGIN, TG_APP_STREAM};
+
+/* add one app_mix line; false if it is invalid */
+bool add_app_mix(char *line)
+{
+    char key[80];
+    unsigned int *r = app_mix[num_app_mix];
+
+    if (num_app_mix >= MAX_APP_MIX
+        || sscanf(line, "%79s %u %u %u %u", key, &r[0], &r[1], &r[2], &r[3]) != 5
+        || r[1] + r[2] + r[3] == 0
+        || (num_app_mix > 0 && r[0] <= app_mix[num_app_mix - 1][0]))
+        return false;
+    num_app_mix++;
+    return true;
+}
+
+/* pick the app type of a flow from the app_mix row that matches its size */
+unsigned int choose_app(unsigned int size)
+{
+    unsigned int j = 0;
+
+    if (num_app_mix == 0)
+        return TG_APP_BULK;
+    while (j + 1 < num_app_mix && size > app_mix[j][0])
+        j++;
+    return gen_value_weight(app_values, &app_mix[j][1], 3, app_mix[j][1] + app_mix[j][2] + app_mix[j][3]);
+}
+
 /* display progress */
 void display_progress(unsigned int num_finished, unsigned int num_total)
 {

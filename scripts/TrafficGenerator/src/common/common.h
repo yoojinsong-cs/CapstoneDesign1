@@ -88,6 +88,12 @@ unsigned int get_usleep_overhead(int iter_num);
 /* randomly generate a value based on weights */
 unsigned int gen_value_weight(unsigned int *vals, unsigned int *weights, unsigned int len, unsigned int weight_total);
 
+/* add one "app_mix <max_size> <w_bulk> <w_login> <w_stream>" line; false if it is invalid */
+bool add_app_mix(char *line);
+
+/* pick the app type (TG_APP_*) of a flow from its size; bulk when no app_mix lines were added */
+unsigned int choose_app(unsigned int size);
+
 /* display progress */
 void display_progress(unsigned int num_finished, unsigned int num_total);
 

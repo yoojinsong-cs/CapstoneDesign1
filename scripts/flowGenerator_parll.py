@@ -13,7 +13,8 @@ from mininet.cli import CLI
 # of every flow (size comes from the request), so huge flows need not finish. -1 = wait for all flows (writes FCT log)
 EARLY_EXIT_SEC = 30
 
-# app type by flow size, written as client config lines: app_mix <max_size> <w_bulk> <w_login> <w_stream>
+# app type by flow size, written as server config lines: app_mix <max_size> <w_bulk> <w_login> <w_stream>
+# the client only asks for a size; the server picks how to send it from these weights
 # clue = how much the app type tells about the size (0..1):
 #   0 -> every size bucket gets the same mix (app type says nothing about size)
 #   1 -> small = login, medium = bulk, large (>= elephant) = stream (app type gives the answer away)
@@ -56,7 +57,6 @@ def flowGenerator (network, port, flowsPerPair, clue, dist='VL2'):
         line = 'req_size_dist TrafficGenerator/conf/%s' % cdf
         configLines.append (line)
 
-        configLines += appMixLines(clue)
 
         with open ('TrafficGenerator/conf/client%s_config.txt' % clientIndex, 'w') as configFile:
             for line in configLines:
@@ -75,9 +75,15 @@ def flowGenerator (network, port, flowsPerPair, clue, dist='VL2'):
             if intf != 'lo':
                 node.cmd('ethtool -K %s gro off gso off tso off' % intf)
 
-    # Start server daemons
+    # different seed per run and per host; printed so a run can be reproduced
+    baseSeed = int(time.time()) % 1000000
+    print('baseSeed', baseSeed)
 
-    startServer(serverHosts, flowsPerPair, port)
+    # Start server daemons (they pick each flow's app from its size)
+
+    with open('TrafficGenerator/conf/server_config.txt', 'w') as configFile:
+        configFile.write('\n'.join(appMixLines(clue)) + '\n')
+    startServer(serverHosts, flowsPerPair, port, baseSeed)
     
     time.sleep (1)
     print ('opened all servers...')
@@ -108,10 +114,6 @@ def flowGenerator (network, port, flowsPerPair, clue, dist='VL2'):
             print('WARNING: tshark on %s did not start' % c.name)
     time.sleep(1)
 
-    # different seed per run and per client; printed so a run can be reproduced
-    baseSeed = int(time.time()) % 1000000
-    print('baseSeed', baseSeed)
-
     processes = []
     print("lenHosts",lenHosts)
     for cIndex in range(0,lenHosts): 
@@ -124,10 +126,11 @@ def flowGenerator (network, port, flowsPerPair, clue, dist='VL2'):
     
     print ('client requests done...')
 
-def startServer(serverHosts, flowsPerPair, port):
-  for server in serverHosts:
+def startServer(serverHosts, flowsPerPair, port, baseSeed):
+  for i, server in enumerate(serverHosts):
         print ('open ' + server.name + ' port#%s' % (port))
-        server.cmd ('TrafficGenerator/bin/server -p %s -d ' % (port))
+        seed = baseSeed * 100 + 50 + i  # differs from the client seeds
+        server.cmd ('TrafficGenerator/bin/server -p %s -c TrafficGenerator/conf/server_config.txt -s %s -d ' % (port, seed))
           
 def startClient(clientHosts, flowsPerPair, clientIndex, baseSeed):
   seed = baseSeed * 100 + clientIndex + 1  # never 0 (0 = time-based in client)

@@ -4,6 +4,7 @@ __pycache__/
 scripts/TrafficGenerator/bin/
 scripts/TrafficGenerator/result/
 scripts/TrafficGenerator/conf/client[0-9]*_config.txt
+scripts/TrafficGenerator/conf/server_config.txt
 scripts/flows_*.txt
 scripts/log_*.txt
 scripts/tshark_*.log

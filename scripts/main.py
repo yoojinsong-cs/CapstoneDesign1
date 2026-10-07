@@ -46,7 +46,11 @@ if __name__ == "__main__":
         os.system('python3 pcap2csv.py /tmp/client%d.pcap 10 %d > %s.csv && python3 csv2html.py %s.csv' % (k, port, name, name))
         if EARLY_EXIT_SEC < 0:  # the FCT log only exists when every flow ran to the end
             os.system('cp flows_%d.txt %s_FCT.txt' % (k - 1, name))
-        for ext in ('.csv', '.html', '_FCT.txt'):
-            if os.path.exists(name + ext) and 'SUDO_UID' in os.environ:
-                os.chown(name + ext, int(os.environ['SUDO_UID']), int(os.environ['SUDO_GID']))
+        # keep the capture too (/tmp/client<k>.pcap is overwritten by the next run); pcap/ is not in git
+        pcap = 'pcap/' + os.path.basename(name) + '.pcap'
+        os.makedirs('pcap', exist_ok=True)
+        os.system('cp /tmp/client%d.pcap %s' % (k, pcap))
+        for path in ('pcap', pcap) + tuple(name + ext for ext in ('.csv', '.html', '_FCT.txt')):
+            if os.path.exists(path) and 'SUDO_UID' in os.environ:
+                os.chown(path, int(os.environ['SUDO_UID']), int(os.environ['SUDO_GID']))
         print('saved', name)

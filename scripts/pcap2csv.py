@@ -1,8 +1,9 @@
 """pcap -> CSV: one row per flow = label (size) + first N server->client data packets.
 
 A flow starts with the client's request {id, size, tos, rate, app} (little-endian, 20 bytes;
-older pcaps have the 16-byte version without app -> app 0).
-id == 0 is the close message. Retransmitted requests are skipped.
+older pcaps have the 16-byte version without app -> app 0). The server answers with the same 20 bytes,
+but with the app it chose (since 10-07 the server picks the app), so `app` is read from that reply.
+id == 0 is the close message. Retransmitted requests and data packets are skipped.
 `size` is the LABEL and `app` (0 bulk, 1 login, 2 stream) is for analysis only -- never use either as a feature.
 
 usage: python3 pcap2csv.py <pcap> [N=10] [port=5001] > out.csv
@@ -31,12 +32,23 @@ def flows(pcap, N=10, port=5001):
         seen.add(fid)
         starts[int(fn)] = (stream, fid, int.from_bytes(b[4:8], 'little'), int.from_bytes(b[16:20], 'little'))
 
+    # the server's 20-byte reply carries the app it actually used
+    replies = {}  # frame number -> app
+    for fn, payload in tshark(pcap, 'tcp.srcport==%d && tcp.len==20' % port, ['frame.number', 'tcp.payload']):
+        replies[int(fn)] = int.from_bytes(bytes.fromhex(payload)[16:20], 'little')
+
     # pass 2: walk all packets in order, assign data packets to the current flow of their stream
     current = {}  # stream -> flow dict
+    sent = {}     # stream -> highest server byte seen (a packet at or below it is a retransmission)
     result = []
-    for fn, t, stream, sport, ln in tshark(pcap, 'tcp.port==%d && tcp.len>0' % port,
-                                           ['frame.number', 'frame.time_epoch', 'tcp.stream', 'tcp.srcport', 'tcp.len']):
+    for fn, t, stream, sport, ln, seq in tshark(pcap, 'tcp.port==%d && tcp.len>0' % port,
+                                                ['frame.number', 'frame.time_epoch', 'tcp.stream', 'tcp.srcport', 'tcp.len', 'tcp.seq']):
         fn, t = int(fn), float(t)
+        if int(sport) == port:
+            end = int(seq) + int(ln)
+            if end <= sent.get(stream, 0):  # a late copy of earlier data would be counted as the next flow's packet
+                continue
+            sent[stream] = end
         if fn in starts:
             _, fid, size, app = starts[fn]
             if fid == 0:  # close is sent right after the last request, while data is still flowing -> ignore
@@ -46,6 +58,8 @@ def flows(pcap, N=10, port=5001):
             result.append(f)
         elif int(sport) == port and stream in current:
             f = current[stream]
+            if not f['pkts'] and fn in replies:  # first server packet = the reply
+                f['app'] = replies[fn]
             if len(f['pkts']) < N:
                 f['pkts'].append((int(ln), t - f['t0']))
     return result

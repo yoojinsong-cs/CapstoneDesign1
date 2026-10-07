@@ -18,11 +18,14 @@ int server_port = TG_SERVER_PORT;
 unsigned int sleep_overhead_us = 50;
 bool verbose_mode = false;  /* by default, we don't give more detailed output */
 bool daemon_mode = false;   /* by default, we don't run the server as a daemon */
+unsigned int seed = 0;      /* random seed for app choice and message sizes (0: time-based) */
 
 /* print usage of the program */
 void print_usage(char *program);
 /* read command line arguments */
 void read_args(int argc, char *argv[]);
+/* read app_mix lines from a configuration file */
+void read_config(char *file_name);
 /* handle an incomming connection */
 void* handle_connection(void* ptr);
 /* get usleep overhead in microsecond (us) */
@@ -41,6 +44,13 @@ int main(int argc, char *argv[])
 
     /* read arguments */
     read_args(argc, argv);
+    if (seed == 0)
+    {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        seed = tv.tv_sec * 1000000 + tv.tv_usec;
+    }
+    srand(seed);
 
     /* calculate usleep overhead */
     sleep_overhead_us = get_usleep_overhead(20);
@@ -152,6 +162,10 @@ void* handle_connection(void* ptr)
             break;
         }
 
+        /* the server, not the client, decides how to send a flow of this size */
+        if (flow.id != 0)
+            flow.app = choose_app(flow.size);
+
         if (verbose_mode)
             printf("Flow request: ID: %u Size: %u bytes ToS: %u Rate: %u Mbps App: %u\n", flow.id, flow.size, flow.tos, flow.rate, flow.app);
 
@@ -173,6 +187,8 @@ void print_usage(char *program)
 {
     printf("Usage: %s [options]\n", program);
     printf("-p <port>   port number (default %d)\n", TG_SERVER_PORT);
+    printf("-c <file>   configuration file with app_mix lines (app type by flow size)\n");
+    printf("-s <seed>   random seed (default: time-based)\n");
     printf("-v          give more detailed output (verbose)\n");
     printf("-d          run the server as a daemon\n");
     printf("-h          display help information\n");
@@ -202,6 +218,20 @@ void read_args(int argc, char *argv[])
                 exit(EXIT_FAILURE);
             }
         }
+        else if (strlen(argv[i]) == 2 && (strcmp(argv[i], "-c") == 0 || strcmp(argv[i], "-s") == 0))
+        {
+            if (i+1 >= argc)
+            {
+                printf("Missing value for %s\n", argv[i]);
+                print_usage(argv[0]);
+                exit(EXIT_FAILURE);
+            }
+            if (argv[i][1] == 'c')
+                read_config(argv[i+1]);
+            else
+                seed = (unsigned int)strtoul(argv[i+1], NULL, 10);
+            i += 2;
+        }
         else if (strlen(argv[i]) == 2 && strcmp(argv[i], "-v") == 0)
         {
             verbose_mode = true;
@@ -224,4 +254,24 @@ void read_args(int argc, char *argv[])
             exit(EXIT_FAILURE);
         }
     }
+}
+
+/* read app_mix lines from a configuration file (other lines are ignored) */
+void read_config(char *file_name)
+{
+    char key[80], line[256];
+    FILE *fd = fopen(file_name, "r");
+
+    if (!fd)
+        error("Error: open configuration file");
+    while (fgets(line, sizeof(line), fd) != NULL)
+    {
+        if (sscanf(line, "%79s", key) == 1 && !strcmp(key, "app_mix"))
+        {
+            if (!add_app_mix(line))
+                error("Invalid app_mix line (max 16 rows, ascending max_size, weights not all 0)");
+            printf("App mix: %s", line);
+        }
+    }
+    fclose(fd);
 }

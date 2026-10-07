@@ -37,12 +37,6 @@ def flowGenerator (network, port, flowsPerPair):
         line = 'req_size_dist TrafficGenerator/conf/%s' % cdf
         configLines.append (line)
 
-        # app type by flow size: app_mix <max_size> <w_bulk> <w_login> <w_stream>
-        # overlapping on purpose (the clue is a tendency, not the answer); delete these to get the old all-bulk traffic
-        configLines += ['app_mix 10000 20 70 10',        # small: mostly login
-                        'app_mix 1000000 30 30 40',      # medium: mixed
-                        'app_mix 4294967295 60 5 35']    # large: mostly bulk/stream
-
         with open ('TrafficGenerator/conf/client%s_config.txt' % clientIndex, 'w') as configFile:
             for line in configLines:
                 configFile.write (line)

@@ -135,12 +135,7 @@ void* handle_connection(void* ptr)
 {
     struct flow_metadata flow;
     int sockfd = *(int*)ptr;
-    int nodelay = 1;
     free(ptr);
-
-    /* send small messages right away (login/stream patterns), like real RPC servers do */
-    if (setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay)) < 0)
-        printf("Error: set TCP_NODELAY\n");
 
     while (1)
     {
@@ -153,7 +148,7 @@ void* handle_connection(void* ptr)
         }
 
         if (verbose_mode)
-            printf("Flow request: ID: %u Size: %u bytes ToS: %u Rate: %u Mbps App: %u\n", flow.id, flow.size, flow.tos, flow.rate, flow.app);
+            printf("Flow request: ID: %u Size: %u bytes ToS: %u Rate: %u Mbps\n", flow.id, flow.size, flow.tos, flow.rate);
 
         /* generate the flow response */
         if (!write_flow(sockfd, &flow, sleep_overhead_us))

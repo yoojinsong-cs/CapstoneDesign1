@@ -878,7 +878,6 @@ void run_incast_request(unsigned int req_id)
                 flow_reqs[conn_id].metadata.size = req_size[req_id]/req_fanout[req_id];
                 flow_reqs[conn_id].metadata.tos = req_dscp[req_id] * 4;  /* ToS = 4 * DSCP */
                 flow_reqs[conn_id].metadata.rate = req_rate[req_id];
-                flow_reqs[conn_id].metadata.app = TG_APP_BULK;
                 conn_id++;
                 global_flow_id++;
             }
@@ -976,7 +975,6 @@ void exit_connection(struct conn_node *node)
     req.metadata.size = 100;
     req.metadata.tos = 0;
     req.metadata.rate = 0;
-    req.metadata.app = TG_APP_BULK;
 
     run_flow((void*)&req);
 }

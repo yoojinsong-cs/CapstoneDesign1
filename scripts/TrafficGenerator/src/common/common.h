@@ -11,22 +11,7 @@ struct flow_metadata
     unsigned int size;  /* flow size (bytes) */
     unsigned int tos;   /* ToS value */
     unsigned int rate;  /* sending rate (Mbps) */
-    unsigned int app;   /* sending pattern: TG_APP_* */
 };
-
-/* how the server writes a flow, so flows differ on the wire */
-#define TG_APP_BULK 0   /* one big write (original behavior) */
-#define TG_APP_LOGIN 1  /* small messages with short gaps */
-#define TG_APP_STREAM 2 /* small header, then chunks with pauses */
-
-#define TG_LOGIN_MSG_MIN 100
-#define TG_LOGIN_MSG_MAX 1400
-#define TG_LOGIN_GAP_US 1000
-#define TG_STREAM_HDR_MIN 300
-#define TG_STREAM_HDR_MAX 1200
-#define TG_STREAM_CHUNK_MIN (16 << 10)
-#define TG_STREAM_CHUNK_MAX (64 << 10)
-#define TG_STREAM_GAP_US 50000
 
 /* flow meata data size */
 #define TG_METADATA_SIZE (sizeof(struct flow_metadata))

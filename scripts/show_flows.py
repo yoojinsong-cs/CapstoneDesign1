@@ -8,37 +8,34 @@ usage:
 import sys
 from pcap2csv import tshark
 
-APPS = ['bulk', 'login', 'stream']
-
-
 def main(pcap, stream=None, port=5001):
     flt = 'tcp.port==%d && tcp.len>0' % port + ('' if stream is None else ' && tcp.stream==%s' % stream)
     pkts = tshark(pcap, flt, ['frame.number', 'frame.time_relative', 'tcp.stream', 'tcp.srcport', 'tcp.len', 'tcp.payload'])
 
     seen = set()
-    conns = {}  # stream -> list of flows; a flow = (id, size, app, packets)
+    conns = {}  # stream -> list of flows; a flow = (id, size, packets)
     for fn, t, st, sport, ln, payload in pkts:
-        if int(sport) != port and int(ln) in (16, 20):  # request from client
+        if int(sport) != port and int(ln) == 16:  # request from client
             b = bytes.fromhex(payload)
             fid = int.from_bytes(b[0:4], 'little')
             if fid == 0 or fid in seen:  # close message / retransmitted request
                 continue
             seen.add(fid)
-            conns.setdefault(st, []).append((fid, int.from_bytes(b[4:8], 'little'), int.from_bytes(b[16:20], 'little'), []))
-            conns[st][-1][3].append((fn, t, 'request', ln))
+            conns.setdefault(st, []).append((fid, int.from_bytes(b[4:8], 'little'), []))
+            conns[st][-1][2].append((fn, t, 'request', ln))
         elif int(sport) == port and conns.get(st):  # server data -> current flow of this connection
-            conns[st][-1][3].append((fn, t, 'server', ln))
+            conns[st][-1][2].append((fn, t, 'server', ln))
 
     if stream is None:
         for st in list(conns)[:10]:
             print('connection (tcp.stream) %s' % st)
-            for fid, size, app, ps in conns[st]:
-                print('  ├─ flow %-5d %13s B  %-6s  %d server packets' % (fid, format(size, ','), APPS[app] if app < 3 else app, len(ps) - 1))
+            for fid, size, ps in conns[st]:
+                print('  ├─ flow %-5d %13s B  %d server packets' % (fid, format(size, ','), len(ps) - 1))
         print('\n%d connections, %d flows' % (len(conns), sum(len(v) for v in conns.values())))
         return
 
-    for fid, size, app, ps in conns.get(stream, []):
-        print('── flow %d  (size %s B, %s) ──' % (fid, format(size, ','), APPS[app] if app < 3 else app))
+    for fid, size, ps in conns.get(stream, []):
+        print('── flow %d  (size %s B) ──' % (fid, format(size, ',')))
         print('  %-7s %-12s %-8s %s' % ('frame', 'time(s)', 'from', 'len'))
         for fn, t, who, ln in ps:
             print('  %-7s %-12.6f %-8s %s' % (fn, float(t), who, ln))

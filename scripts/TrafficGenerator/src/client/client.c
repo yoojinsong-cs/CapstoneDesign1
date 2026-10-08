@@ -25,6 +25,11 @@ char result_script_name[80] = {0};  /* script file to parse final results */
 unsigned int usleep_overhead_us = 0;    /* usleep overhead in microsecond */
 struct timeval tv_start, tv_end;    /* start and end time of traffic */
 unsigned int num_new_conn = 0;  /* new established connections */
+unsigned int max_connections = TG_PAIR_MAX_CONN; /* per server */
+unsigned int num_flows_finished = 0;  /* completed flows across all servers */
+unsigned int last_progress_percent = 0;
+bool generation_failed = false;
+pthread_mutex_t progress_lock = PTHREAD_MUTEX_INITIALIZER;
 
 /* per-server variables */
 unsigned int num_server = 0;    /* total number of servers */
@@ -72,7 +77,7 @@ void *listen_connection(void *ptr);
 /* generate flow requests */
 void run_requests();
 /* generate a flow request to the server */
-void run_request(unsigned int req_id);
+bool run_request(unsigned int req_id);
 /* terminate all existing connections */
 void exit_connections();
 /* terminate a connection */
@@ -148,7 +153,11 @@ int main(int argc, char *argv[])
                 break;
             else
             {
-                pthread_create(&(ptr->thread), NULL, listen_connection, (void*)ptr);
+                if (!start_conn_thread(ptr, listen_connection))
+                {
+                    fprintf(stderr, "Fatal: cannot start initial listener thread\n");
+                    exit(EXIT_FAILURE);
+                }
                 ptr = ptr->next;
             }
         }
@@ -157,6 +166,8 @@ int main(int argc, char *argv[])
     printf("===========================================\n");
     printf("Start to generate requests\n");
     printf("===========================================\n");
+    printf("FLOW_PROGRESS 0 %u\n", req_total_num);
+    fflush(stdout);
     gettimeofday(&tv_start, NULL);
     run_requests();
 
@@ -165,6 +176,10 @@ int main(int argc, char *argv[])
     printf("Exit connections\n");
     printf("===========================================\n");
     exit_connections();
+    pthread_mutex_lock(&progress_lock);
+    printf("FLOW_PROGRESS %u %u\n", num_flows_finished, req_total_num);
+    fflush(stdout);
+    pthread_mutex_unlock(&progress_lock);
     gettimeofday(&tv_end, NULL);
 
     printf("===========================================\n");
@@ -187,7 +202,7 @@ int main(int argc, char *argv[])
         system(cmd);
     }
 
-    return 0;
+    return generation_failed ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
 /* print usage of the program */
@@ -200,6 +215,7 @@ void print_usage(char *program)
     printf("-t <time>       time in seconds (instead of -n)\n");
     printf("-l <file>       log file with flow completion times (default %s)\n", fct_log_name);
     printf("-s <seed>       seed to generate random numbers (default current time)\n");
+    printf("-m <number>     maximum connections per server (default %u)\n", TG_PAIR_MAX_CONN);
     printf("-r <file>       python script to parse result files\n");
     printf("-v              give more detailed output (verbose)\n");
     printf("-h              display help information\n");
@@ -305,6 +321,26 @@ void read_args(int argc, char *argv[])
             else
             {
                 printf("Cannot read seed value\n");
+                print_usage(argv[0]);
+                exit(EXIT_FAILURE);
+            }
+        }
+        else if (strlen(argv[i]) == 2 && strcmp(argv[i], "-m") == 0)
+        {
+            if (i+1 < argc)
+            {
+                max_connections = (unsigned int)strtoul(argv[i+1], NULL, 10);
+                if (max_connections < TG_PAIR_INIT_CONN)
+                {
+                    printf("Maximum connections must be at least %u\n", TG_PAIR_INIT_CONN);
+                    print_usage(argv[0]);
+                    exit(EXIT_FAILURE);
+                }
+                i += 2;
+            }
+            else
+            {
+                printf("Cannot read maximum connections\n");
                 print_usage(argv[0]);
                 exit(EXIT_FAILURE);
             }
@@ -605,6 +641,7 @@ void set_req_variables()
     printf("The average DSCP value is %.2f\n", dscp_total/req_total_num);
     printf("The average flow sending rate is %lu Mbps\n", rate_total/req_total_num);
     printf("The expected experiment duration is %lu s\n", req_interval_total/1000000);
+    printf("The connection limit is %u per server\n", max_connections);
 }
 
 /* receive traffic from established connections */
@@ -628,11 +665,11 @@ void *listen_connection(void *ptr)
             break;
         }
 
-        node->busy = false;
         pthread_mutex_lock(&(node->list->lock));
         /* not the special flow ID */
         if (flow.id != 0)
         {
+            node->busy = false;
             node->list->flow_finished++;
             node->list->available_len++;
         }
@@ -644,12 +681,36 @@ void *listen_connection(void *ptr)
         if (flow.id == 0)
             break;
         else
+        {
             gettimeofday(&req_stop_time[flow.id - 1], NULL);
+
+            /* Emit a machine-readable, flushed update once per percentage
+               point.  flowGenerator_parll.py uses this to show live CLI
+               progress while the client output itself remains in a log. */
+            pthread_mutex_lock(&progress_lock);
+            num_flows_finished++;
+            unsigned int progress_percent = (unsigned int)
+                (((unsigned long long)num_flows_finished * 100) / req_total_num);
+            if (progress_percent > last_progress_percent ||
+                num_flows_finished == req_total_num)
+            {
+                last_progress_percent = progress_percent;
+                printf("FLOW_PROGRESS %u %u\n", num_flows_finished, req_total_num);
+                fflush(stdout);
+            }
+            pthread_mutex_unlock(&progress_lock);
+        }
     }
 
+    shutdown(node->sockfd, SHUT_RDWR);
     close(node->sockfd);
+    pthread_mutex_lock(&(node->list->lock));
+    if (!node->busy && node->list->available_len > 0)
+        node->list->available_len--;
+    node->sockfd = -1;
     node->connected = false;
     node->busy = false;
+    pthread_mutex_unlock(&(node->list->lock));
 
     return (void*)0;
 }
@@ -669,7 +730,12 @@ void run_requests()
             usleep(sleep_us - usleep_overhead_us);
             sleep_us = 0;
         }
-        run_request(i);
+        if (!run_request(i))
+        {
+            generation_failed = true;
+            fprintf(stderr, "Fatal: stopped after request %u because its connection failed\n", i + 1);
+            break;
+        }
 
         if (!verbose_mode && i + 1 >= k * req_total_num / 100)
         {
@@ -682,12 +748,12 @@ void run_requests()
 }
 
 /* generate a flow request to the server */
-void run_request(unsigned int req_id)
+bool run_request(unsigned int req_id)
 {
     unsigned int server_id = req_server_id[req_id];
     int sockfd;
     struct flow_metadata flow;
-    struct conn_node* node = search_conn_list(&connection_lists[server_id]);
+    struct conn_node* node = NULL;
     unsigned int active_connections = 0;
     unsigned int i = 0;
 
@@ -696,22 +762,28 @@ void run_request(unsigned int req_id)
     flow.tos = req_dscp[req_id] << 2;   /* ToS = DSCP * 4 */
     flow.rate = req_rate[req_id];
 
-    /* cannot find available connection. Need to establish new connections. */
-    if (!node)
+    /* Reserve an idle connection atomically.  At the cap, wait for a flow to
+       finish instead of creating one thread/socket for every queued flow. */
+    while ((node = acquire_conn_list(&connection_lists[server_id])) == NULL)
     {
-        if (insert_conn_list(&connection_lists[server_id], 1))
+        if (connected_conn_count(&connection_lists[server_id]) < max_connections)
         {
+            if (!insert_conn_list(&connection_lists[server_id], 1))
+            {
+                fprintf(stderr, "Cannot establish a new connection to %s:%u\n",
+                        server_addr[server_id], server_port[server_id]);
+                return false;
+            }
             node = connection_lists[server_id].tail;
+            if (!start_conn_thread(node, listen_connection))
+                return false;
             if (verbose_mode)
-                printf("[%u] Establish a new connection to %s:%u (available/total = %u/%u)\n", ++num_new_conn, server_addr[server_id], server_port[server_id], node->list->available_len, node->list->len);
-            pthread_create(&(node->thread), NULL, listen_connection, (void*)node);
+                printf("[%u] Establish a new connection to %s:%u (available/total = %u/%u)\n",
+                       ++num_new_conn, server_addr[server_id], server_port[server_id],
+                       node->list->available_len, node->list->len);
         }
         else
-        {
-            if (verbose_mode)
-                printf("Cannot establish a new connection to %s:%u\n", server_addr[server_id], server_port[server_id]);
-            return;
-        }
+            usleep(1000);
     }
 
     if (verbose_mode && (req_id % 100 == 0))
@@ -725,13 +797,13 @@ void run_request(unsigned int req_id)
     /* Send request and record start time */
     gettimeofday(&req_start_time[req_id], NULL);
     sockfd = node->sockfd;
-    node->busy = true;
-    pthread_mutex_lock(&(node->list->lock));
-    node->list->available_len--;
-    pthread_mutex_unlock(&(node->list->lock));
-
     if (!write_flow_req(sockfd, &flow))
+    {
         perror("Error: generate request");
+        shutdown(sockfd, SHUT_RDWR);
+        return false;
+    }
+    return true;
 }
 
 /* Terminate all existing connections */
@@ -780,12 +852,11 @@ void exit_connection(struct conn_node *node)
         return;
 
     sockfd = node->sockfd;
-    pthread_mutex_lock(&(node->list->lock));
-    node->list->available_len--;
-    pthread_mutex_unlock(&(node->list->lock));
-
     if (!write_flow_req(sockfd, &flow))
+    {
         perror("Error: generate request");
+        shutdown(sockfd, SHUT_RDWR);
+    }
 }
 
 void print_statistic()

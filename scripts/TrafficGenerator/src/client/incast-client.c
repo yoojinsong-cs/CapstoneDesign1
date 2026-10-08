@@ -174,7 +174,11 @@ int main(int argc, char *argv[])
                 break;
             else
             {
-                pthread_create(&(ptr->thread), NULL, listen_connection, (void*)ptr);
+                if (!start_conn_thread(ptr, listen_connection))
+                {
+                    fprintf(stderr, "Fatal: cannot start initial listener thread\n");
+                    exit(EXIT_FAILURE);
+                }
                 ptr = ptr->next;
             }
         }
@@ -848,7 +852,14 @@ void run_incast_request(unsigned int req_id)
                 {
                     tail_node = tail_node->next;
                     if (tail_node)
-                        pthread_create(&(tail_node->thread), NULL, listen_connection, (void*)tail_node);
+                    {
+                        if (!start_conn_thread(tail_node, listen_connection))
+                        {
+                            fprintf(stderr, "Cannot start listener for %s:%u\n",
+                                    server_addr[i], server_port[i]);
+                            break;
+                        }
+                    }
                     else
                         break;
                 }

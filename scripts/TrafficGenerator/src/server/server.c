@@ -9,6 +9,8 @@
 #include <arpa/inet.h>
 #include <sys/time.h>
 #include <sys/stat.h>
+#include <errno.h>
+#include <signal.h>
 
 #include <pthread.h>
 
@@ -36,11 +38,30 @@ int main(int argc, char *argv[])
     struct sockaddr_in cli_addr;    /* remote client address */
     int sock_opt = 1;
     pthread_t serv_thread;  /* server thread */
+    pthread_attr_t thread_attr;
     int* sockfd_ptr = NULL;
     socklen_t len = sizeof(struct sockaddr_in);
+    struct timeval socket_timeout = {TG_SOCKET_TIMEOUT_SEC, 0};
 
     /* read arguments */
     read_args(argc, argv);
+    signal(SIGPIPE, SIG_IGN);
+
+    int thread_rc = pthread_attr_init(&thread_attr);
+    if (thread_rc != 0)
+    {
+        fprintf(stderr, "Error: initialize server thread attributes: %s\n", strerror(thread_rc));
+        return EXIT_FAILURE;
+    }
+    thread_rc = pthread_attr_setstacksize(&thread_attr, TG_THREAD_STACK_SIZE);
+    if (thread_rc == 0)
+        thread_rc = pthread_attr_setdetachstate(&thread_attr, PTHREAD_CREATE_DETACHED);
+    if (thread_rc != 0)
+    {
+        fprintf(stderr, "Error: configure server thread attributes: %s\n", strerror(thread_rc));
+        pthread_attr_destroy(&thread_attr);
+        return EXIT_FAILURE;
+    }
 
     /* calculate usleep overhead */
     sleep_overhead_us = get_usleep_overhead(20);
@@ -115,15 +136,29 @@ int main(int argc, char *argv[])
         *sockfd_ptr = accept(listen_fd, (struct sockaddr *)&cli_addr, &len);
         if (*sockfd_ptr < 0)
         {
-            close(listen_fd);
             free(sockfd_ptr);
-            error("Error: accept");
+            if (errno == EINTR)
+                continue;
+            perror("Error: accept");
+            continue;
         }
-        else if (pthread_create(&serv_thread, NULL, handle_connection, (void*)sockfd_ptr) < 0)
+        if (setsockopt(*sockfd_ptr, SOL_SOCKET, SO_RCVTIMEO,
+                       &socket_timeout, sizeof(socket_timeout)) < 0 ||
+            setsockopt(*sockfd_ptr, SOL_SOCKET, SO_SNDTIMEO,
+                       &socket_timeout, sizeof(socket_timeout)) < 0)
         {
-            close(listen_fd);
+            perror("Error: set accepted socket timeout");
+            close(*sockfd_ptr);
             free(sockfd_ptr);
-            error("Error: create pthread");
+            continue;
+        }
+        thread_rc = pthread_create(&serv_thread, &thread_attr, handle_connection, (void*)sockfd_ptr);
+        if (thread_rc != 0)
+        {
+            fprintf(stderr, "Error: create server thread: %s\n", strerror(thread_rc));
+            close(*sockfd_ptr);
+            free(sockfd_ptr);
+            continue;
         }
     }
 

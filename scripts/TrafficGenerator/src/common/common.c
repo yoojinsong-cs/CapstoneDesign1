@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <math.h>
+#include <errno.h>
 
 #include "common.h"
 
@@ -46,10 +47,10 @@ unsigned int read_exact(int fd, char *buf, size_t count, size_t max_per_read, bo
         cur_buf = (dummy_buf) ? buf : (buf + bytes_total_read);
         n = read(fd, cur_buf, bytes_to_read);
 
+        if (n < 0 && errno == EINTR)
+            continue;
         if (n <= 0)
         {
-            if (n < 0)
-                printf("Error: read() in read_exact()");
             break;
         }
         else
@@ -98,19 +99,19 @@ unsigned int write_exact(int fd, char *buf, size_t count, size_t max_per_write,
         bytes_to_write = (count > max_per_write) ? max_per_write : count;
         cur_buf = (dummy_buf) ? buf : (buf + bytes_total_write);
         gettimeofday(&tv_start, NULL);
-        n = write(fd, cur_buf, bytes_to_write);
+        n = send(fd, cur_buf, bytes_to_write, MSG_NOSIGNAL);
         gettimeofday(&tv_end, NULL);
-        write_us = (tv_end.tv_sec - tv_start.tv_sec) * 1000000 + tv_end.tv_usec - tv_start.tv_usec;
-        sleep_us += (rate_mbps) ? n * 8 / rate_mbps - write_us : 0;
 
+        if (n < 0 && errno == EINTR)
+            continue;
         if (n <= 0)
         {
-            if (n < 0)
-                printf("Error: write() in write_exact()");
             break;
         }
         else
         {
+            write_us = (tv_end.tv_sec - tv_start.tv_sec) * 1000000 + tv_end.tv_usec - tv_start.tv_usec;
+            sleep_us += (rate_mbps) ? n * 8 / rate_mbps - write_us : 0;
             bytes_total_write += n;
             count -= n;
             if (sleep_overhead_us < sleep_us)

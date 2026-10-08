@@ -23,10 +23,17 @@ struct flow_metadata
 #define TG_MAX_WRITE (1 << 20)
 /* minimum number of bytes to write in a 'send' system call (used with rate limiting) */
 #define TG_MIN_WRITE (1 << 16)
-/* maximum amount of data to read in a 'recv' system call */
-#define TG_MAX_READ (1 << 20)
+/* maximum amount of data to read in a 'recv' system call.  The receive
+ * buffer is allocated on each listener thread's stack and is reused. */
+#define TG_MAX_READ (1 << 16)
 /* default initial number of TCP connections per pair */
 #define TG_PAIR_INIT_CONN 5
+/* bounded connection pool: prevents one thread per queued flow */
+#define TG_PAIR_MAX_CONN 256
+/* listener threads do not need pthread's multi-megabyte default stack */
+#define TG_THREAD_STACK_SIZE (256 << 10)
+/* fail a dead/unserviced connection instead of waiting forever */
+#define TG_SOCKET_TIMEOUT_SEC 120
 /* default goodput / link capacity ratio */
 #define TG_GOODPUT_RATIO (1448.0 / (1500 + 14 + 4 + 8 + 12))
 

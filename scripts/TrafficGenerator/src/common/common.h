@@ -11,22 +11,7 @@ struct flow_metadata
     unsigned int size;  /* flow size (bytes) */
     unsigned int tos;   /* ToS value */
     unsigned int rate;  /* sending rate (Mbps) */
-    unsigned int app;   /* sending pattern: TG_APP_* */
 };
-
-/* how the server writes a flow, so flows differ on the wire */
-#define TG_APP_BULK 0   /* one big write (original behavior) */
-#define TG_APP_LOGIN 1  /* small messages with short gaps */
-#define TG_APP_STREAM 2 /* small header, then chunks with pauses */
-
-#define TG_LOGIN_MSG_MIN 100
-#define TG_LOGIN_MSG_MAX 1400
-#define TG_LOGIN_GAP_US 1000
-#define TG_STREAM_HDR_MIN 300
-#define TG_STREAM_HDR_MAX 1200
-#define TG_STREAM_CHUNK_MIN (16 << 10)
-#define TG_STREAM_CHUNK_MAX (64 << 10)
-#define TG_STREAM_GAP_US 50000
 
 /* flow meata data size */
 #define TG_METADATA_SIZE (sizeof(struct flow_metadata))
@@ -38,10 +23,17 @@ struct flow_metadata
 #define TG_MAX_WRITE (1 << 20)
 /* minimum number of bytes to write in a 'send' system call (used with rate limiting) */
 #define TG_MIN_WRITE (1 << 16)
-/* maximum amount of data to read in a 'recv' system call */
-#define TG_MAX_READ (1 << 20)
+/* maximum amount of data to read in a 'recv' system call.  The receive
+ * buffer is allocated on each listener thread's stack and is reused. */
+#define TG_MAX_READ (1 << 16)
 /* default initial number of TCP connections per pair */
 #define TG_PAIR_INIT_CONN 5
+/* bounded connection pool: prevents one thread per queued flow */
+#define TG_PAIR_MAX_CONN 256
+/* listener threads do not need pthread's multi-megabyte default stack */
+#define TG_THREAD_STACK_SIZE (256 << 10)
+/* fail a dead/unserviced connection instead of waiting forever */
+#define TG_SOCKET_TIMEOUT_SEC 120
 /* default goodput / link capacity ratio */
 #define TG_GOODPUT_RATIO (1448.0 / (1500 + 14 + 4 + 8 + 12))
 

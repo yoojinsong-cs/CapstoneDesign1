@@ -14,6 +14,7 @@ struct conn_node
     int id; /* connection ID */
     int sockfd; /* socket */
     pthread_t thread;   /* thread */
+    bool thread_started; /* whether thread contains a joinable thread */
     bool busy;  /* whether the connection is receiving data */
     bool connected; /* whether the connection is established */
     struct conn_node *next; /* pointer to next node */
@@ -43,6 +44,15 @@ bool insert_conn_list(struct conn_list *list, int num);
 
 /* search the first available connection (busy==false) in the list. */
 struct conn_node *search_conn_list(struct conn_list *list);
+
+/* atomically find and reserve the first available connection */
+struct conn_node *acquire_conn_list(struct conn_list *list);
+
+/* count currently connected nodes */
+unsigned int connected_conn_count(struct conn_list *list);
+
+/* start a listener with a bounded stack and record failures safely */
+bool start_conn_thread(struct conn_node *node, void *(*start_routine)(void *));
 
 /* search N available connections in the list */
 struct conn_node **search_n_conn_list(struct conn_list *list, unsigned int num);

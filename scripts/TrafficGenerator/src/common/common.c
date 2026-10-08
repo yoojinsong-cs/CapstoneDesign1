@@ -7,6 +7,7 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <math.h>
+#include <errno.h>
 
 #include "common.h"
 
@@ -46,10 +47,10 @@ unsigned int read_exact(int fd, char *buf, size_t count, size_t max_per_read, bo
         cur_buf = (dummy_buf) ? buf : (buf + bytes_total_read);
         n = read(fd, cur_buf, bytes_to_read);
 
+        if (n < 0 && errno == EINTR)
+            continue;
         if (n <= 0)
         {
-            if (n < 0)
-                printf("Error: read() in read_exact()");
             break;
         }
         else
@@ -98,19 +99,19 @@ unsigned int write_exact(int fd, char *buf, size_t count, size_t max_per_write,
         bytes_to_write = (count > max_per_write) ? max_per_write : count;
         cur_buf = (dummy_buf) ? buf : (buf + bytes_total_write);
         gettimeofday(&tv_start, NULL);
-        n = write(fd, cur_buf, bytes_to_write);
+        n = send(fd, cur_buf, bytes_to_write, MSG_NOSIGNAL);
         gettimeofday(&tv_end, NULL);
-        write_us = (tv_end.tv_sec - tv_start.tv_sec) * 1000000 + tv_end.tv_usec - tv_start.tv_usec;
-        sleep_us += (rate_mbps) ? n * 8 / rate_mbps - write_us : 0;
 
+        if (n < 0 && errno == EINTR)
+            continue;
         if (n <= 0)
         {
-            if (n < 0)
-                printf("Error: write() in write_exact()");
             break;
         }
         else
         {
+            write_us = (tv_end.tv_sec - tv_start.tv_sec) * 1000000 + tv_end.tv_usec - tv_start.tv_usec;
+            sleep_us += (rate_mbps) ? n * 8 / rate_mbps - write_us : 0;
             bytes_total_write += n;
             count -= n;
             if (sleep_overhead_us < sleep_us)
@@ -140,7 +141,6 @@ bool read_flow_metadata(int fd, struct flow_metadata *f)
     memcpy(&(f->size), buf + offsetof(struct flow_metadata, size), sizeof(f->size));
     memcpy(&(f->tos), buf + offsetof(struct flow_metadata, tos), sizeof(f->tos));
     memcpy(&(f->rate), buf + offsetof(struct flow_metadata, rate), sizeof(f->rate));
-    memcpy(&(f->app), buf + offsetof(struct flow_metadata, app), sizeof(f->app));
 
     return true;
 }
@@ -158,62 +158,12 @@ bool write_flow_req(int fd, struct flow_metadata *f)
     memcpy(buf + offsetof(struct flow_metadata, size), &(f->size), sizeof(f->size));
     memcpy(buf + offsetof(struct flow_metadata, tos),  &(f->tos), sizeof(f->tos));
     memcpy(buf + offsetof(struct flow_metadata, rate), &(f->rate), sizeof(f->rate));
-    memcpy(buf + offsetof(struct flow_metadata, app), &(f->app), sizeof(f->app));
 
     /* write the request into the socket */
     if (write_exact(fd, buf, TG_METADATA_SIZE, TG_METADATA_SIZE, 0, f->tos, 0, false) == TG_METADATA_SIZE)
         return true;
     else
         return false;
-}
-
-/* random integer in [lo, hi] */
-static unsigned int rand_between(unsigned int lo, unsigned int hi)
-{
-    return lo + rand() % (hi - lo + 1);
-}
-
-/* write 'count' bytes as messages of [msg_min, msg_max] bytes with gap_us between them */
-static unsigned int write_messages(int fd, unsigned int count, unsigned int msg_min, unsigned int msg_max,
-    unsigned int gap_us, unsigned int tos)
-{
-    unsigned int total = 0, msg, n;
-
-    while (total < count)
-    {
-        msg = rand_between(msg_min, msg_max);   /* not inside min(): the macro would call rand twice */
-        msg = min(msg, count - total);
-        n = write_exact(fd, max_write_buf, msg, TG_MAX_WRITE, 0, tos, 0, true);
-        total += n;
-        if (n < msg)
-            break;
-        if (total < count)
-            usleep(gap_us);
-    }
-
-    return total;
-}
-
-/* write the flow body with the pattern of its app type */
-static unsigned int write_app(int fd, struct flow_metadata *f)
-{
-    unsigned int hdr;
-
-    switch (f->app)
-    {
-    case TG_APP_LOGIN:
-        return write_messages(fd, f->size, TG_LOGIN_MSG_MIN, TG_LOGIN_MSG_MAX, TG_LOGIN_GAP_US, f->tos);
-    case TG_APP_STREAM:
-        hdr = rand_between(TG_STREAM_HDR_MIN, TG_STREAM_HDR_MAX);
-        hdr = min(hdr, f->size);
-        if (write_exact(fd, max_write_buf, hdr, TG_MAX_WRITE, 0, f->tos, 0, true) < hdr)
-            return 0;
-        if (hdr < f->size)
-            usleep(TG_STREAM_GAP_US);
-        return hdr + write_messages(fd, f->size - hdr, TG_STREAM_CHUNK_MIN, TG_STREAM_CHUNK_MAX, TG_STREAM_GAP_US, f->tos);
-    default:
-        return 0;
-    }
 }
 
 /* write a flow (response) into a socket and return true if it succeeds */
@@ -247,10 +197,7 @@ bool write_flow(int fd, struct flow_metadata *f, unsigned int sleep_overhead_us)
     }
 
     /* generate the flow response */
-    if (f->app == TG_APP_LOGIN || f->app == TG_APP_STREAM)
-        result = write_app(fd, f);
-    else
-        result = write_exact(fd, write_buf, f->size, max_per_write, f->rate, f->tos, sleep_overhead_us, true);
+    result = write_exact(fd, write_buf, f->size, max_per_write, f->rate, f->tos, sleep_overhead_us, true);
     if (result == f->size)
         return true;
     else

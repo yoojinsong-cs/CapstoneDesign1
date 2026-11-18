@@ -8,8 +8,39 @@ import time
 
 
 MAX_CONNECTIONS_PER_SERVER = 256
+FLOW_SIZE_CDF_PATH = 'TrafficGenerator/conf/VL2_CDF.txt'
 PROGRESS_RE = re.compile(r'^FLOW_PROGRESS\s+(\d+)\s+(\d+)$')
 EXIT_CODE_RE = re.compile(r'^CLIENT_EXIT_CODE\s+(\d+)$')
+TIMING_RE = re.compile(r'^FLOW_TIMING_NS\s+(\d+)\s+(\d+)$')
+
+
+def readTransferTiming(clientCount, directory='.'):
+    """First request to last completed flow, on the shared host monotonic clock."""
+    timings = []
+    for index in range(clientCount):
+        timing = None
+        with open(os.path.join(directory, 'log_%d.txt' % index)) as stream:
+            for line in stream:
+                match = TIMING_RE.match(line.strip())
+                if match:
+                    timing = tuple(map(int, match.groups()))
+        if timing is None or not 0 < timing[0] <= timing[1]:
+            raise RuntimeError('missing or invalid completed transfer timing for client%d' % (index + 1))
+        timings.append(timing)
+    first = min(start for start, _ in timings)
+    last = max(end for _, end in timings)
+    return dict(first_request_ns=first, last_completion_ns=last,
+                transfer_time_seconds=(last - first) / 1_000_000_000)
+
+
+def flowSizeDistributionName(cdfPath=FLOW_SIZE_CDF_PATH):
+    """Return the distribution label used in generated artifact names."""
+    name = os.path.splitext(os.path.basename(cdfPath))[0]
+    if name.upper().endswith('_CDF'):
+        name = name[:-4]
+    if not name:
+        raise ValueError('cannot derive distribution name from %r' % cdfPath)
+    return name
 
 
 def updateClientProgress(progress, offsets, flowsPerPair):
@@ -45,7 +76,7 @@ def formatProgress(progress, flowsPerPair, elapsed, idleFor):
     )
     status = ('[progress %s] %s/%s flows (%5.1f%%) | %s' %
               (formatDuration(elapsed), finished, total, percent, clients))
-    if finished and idleFor >= 30:
+    if idleFor >= 30:
         status += ' | no completion for %s' % formatDuration(idleFor)
     return status
 
@@ -60,7 +91,11 @@ def parseBackgroundPid(output, processName):
 def stopManagedProcesses(entries, signalName):
     for host, pid in entries:
         try:
-            host.cmd('kill -%s %s 2>/dev/null || true' % (signalName, pid))
+            # A client can still occupy this node's interactive shell after its
+            # Python wrapper is interrupted. Use an independent process so
+            # capture/server cleanup never waits for that shell to become idle.
+            process = host.popen(['kill', '-%s' % signalName, str(pid)])
+            process.wait(timeout=5)
         except Exception as exc:
             print('WARNING: could not stop PID %s on %s: %s' % (pid, host.name, exc))
 
@@ -82,15 +117,16 @@ def averageCdfBytes(path):
     return average
 
 
-def printIdealRuntimeEstimate(network, clientCount, flowsPerPair):
+def printIdealRuntimeEstimate(network, clientCount, flowsPerPair,
+                              cdfPath=FLOW_SIZE_CDF_PATH):
     cores = sum(1 for switch in network.switches if switch.name.startswith('core'))
     serverEdges = sum(1 for switch in network.switches if switch.name.startswith('Edges'))
     clientEdges = sum(1 for switch in network.switches if switch.name.startswith('Edgec'))
-    # topoBuilder_lb.py fixes every edge/core link at 10 Mbps.
-    idealMbps = cores * min(serverEdges, clientEdges) * 10
+    edgeCoreMbps = getattr(network, 'edge_core_mbps', 10)
+    idealMbps = cores * min(serverEdges, clientEdges) * edgeCoreMbps
     if idealMbps <= 0:
         return
-    averageBytes = averageCdfBytes('TrafficGenerator/conf/DCTCP_CDF.txt')
+    averageBytes = averageCdfBytes(cdfPath)
     expectedBytes = averageBytes * clientCount * flowsPerPair
     idealSeconds = expectedBytes * 8 / (idealMbps * 1000000.0)
     print('expected data: %.2f GB; ideal %s Mbps transfer lower bound: %s' %
@@ -98,7 +134,9 @@ def printIdealRuntimeEstimate(network, clientCount, flowsPerPair):
            formatDuration(idealSeconds)))
 
 
-def flowGenerator(network, port, flowsPerPair):
+def flowGenerator(network, port, flowsPerPair,
+                  cdfPath=FLOW_SIZE_CDF_PATH, baseSeed=None, loadMbps=900,
+                  healthCheck=None, capture=True, progressCallback=None):
     allHosts = network.hosts
     serverHosts = [host for host in allHosts if host.name.startswith('server')]
     clientHosts = [host for host in allHosts if host.name.startswith('client')]
@@ -110,7 +148,7 @@ def flowGenerator(network, port, flowsPerPair):
         serverIp = serverHosts[clientIndex % len(serverHosts)].params['ip']
         configLines = [
             'server %s %s' % (serverIp, port),
-            'req_size_dist TrafficGenerator/conf/DCTCP_CDF.txt',
+            'req_size_dist %s' % cdfPath,
         ]
         with open('TrafficGenerator/conf/client%s_config.txt' % clientIndex, 'w') as configFile:
             configFile.write('\n'.join(configLines) + '\n')
@@ -140,11 +178,14 @@ def flowGenerator(network, port, flowsPerPair):
                     'server on %s exited during startup; see server_%s.log' %
                     (serverHost.name, serverHost.name))
 
-        printIdealRuntimeEstimate(network, len(clientHosts), flowsPerPair)
+        print('flow size distribution: %s (%s)' %
+              (flowSizeDistributionName(cdfPath), cdfPath))
+        printIdealRuntimeEstimate(
+            network, len(clientHosts), flowsPerPair, cdfPath)
 
         # /tmp is writable after dumpcap drops root privileges.  A 128-byte
         # snapshot retains headers and request payload while limiting disk use.
-        for clientHost in clientHosts:
+        for clientHost in (clientHosts if capture else []):
             captureLog = 'tshark_%s.log' % clientHost.name
             capturePath = '/tmp/%s.pcap' % clientHost.name
             if os.path.exists(captureLog):
@@ -158,7 +199,7 @@ def flowGenerator(network, port, flowsPerPair):
             captureProcesses.append(
                 (clientHost, parseBackgroundPid(output, 'tshark on %s' % clientHost.name)))
 
-        for clientHost in clientHosts:
+        for clientHost in (clientHosts if capture else []):
             captureLog = 'tshark_%s.log' % clientHost.name
             for _ in range(60):
                 try:
@@ -170,13 +211,16 @@ def flowGenerator(network, port, flowsPerPair):
                 time.sleep(0.5)
             else:
                 raise RuntimeError('tshark on %s did not start' % clientHost.name)
-        time.sleep(1)
+        if capture:
+            time.sleep(1)
 
-        baseSeed = int(time.time()) % 1000000
+        if baseSeed is None:
+            baseSeed = int(time.time()) % 1000000
         print('baseSeed', baseSeed)
         print('clients', len(clientHosts))
         print('connection limit: %s per client/server pair' % MAX_CONNECTIONS_PER_SERVER)
 
+        startedAt = time.monotonic()
         for clientIndex, clientHost in enumerate(clientHosts):
             logPath = 'log_%s.txt' % clientIndex
             if os.path.exists(logPath):
@@ -185,11 +229,10 @@ def flowGenerator(network, port, flowsPerPair):
             print('start flows from %s (seed %s)' % (clientHost.name, seed))
             process = multiprocessing.Process(
                 target=startClient,
-                args=(clientHosts, flowsPerPair, clientIndex, seed))
+                args=(clientHosts, flowsPerPair, clientIndex, seed, loadMbps))
             process.start()
             clientProcesses.append(process)
 
-        startedAt = time.monotonic()
         lastProgressAt = startedAt
         previousFinished = 0
         previousLength = 0
@@ -197,16 +240,21 @@ def flowGenerator(network, port, flowsPerPair):
         progressOffsets = [0] * len(clientHosts)
 
         while any(process.is_alive() for process in clientProcesses):
+            if healthCheck is not None:
+                healthCheck()
             now = time.monotonic()
             updateClientProgress(progress, progressOffsets, flowsPerPair)
             finished = sum(progress)
             if finished != previousFinished:
                 previousFinished = finished
                 lastProgressAt = now
-            status = formatProgress(
-                progress, flowsPerPair, now - startedAt, now - lastProgressAt)
-            print('\r' + status.ljust(previousLength), end='', flush=True)
-            previousLength = max(previousLength, len(status))
+            if progressCallback is not None:
+                progressCallback(list(progress), flowsPerPair, now - startedAt, now - lastProgressAt)
+            else:
+                status = formatProgress(
+                    progress, flowsPerPair, now - startedAt, now - lastProgressAt)
+                print('\r' + status.ljust(previousLength), end='', flush=True)
+                previousLength = max(previousLength, len(status))
             time.sleep(2)
 
         for process in clientProcesses:
@@ -214,9 +262,12 @@ def flowGenerator(network, port, flowsPerPair):
 
         now = time.monotonic()
         updateClientProgress(progress, progressOffsets, flowsPerPair)
-        status = formatProgress(
-            progress, flowsPerPair, now - startedAt, now - lastProgressAt)
-        print('\r' + status.ljust(previousLength), flush=True)
+        if progressCallback is not None:
+            progressCallback(list(progress), flowsPerPair, now - startedAt, now - lastProgressAt)
+        else:
+            status = formatProgress(
+                progress, flowsPerPair, now - startedAt, now - lastProgressAt)
+            print('\r' + status.ljust(previousLength), flush=True)
 
         failedClients = [
             index + 1 for index, process in enumerate(clientProcesses)
@@ -233,6 +284,9 @@ def flowGenerator(network, port, flowsPerPair):
                 (failedClients, incompleteClients))
 
         print('client requests done...')
+        timing = readTransferTiming(len(clientHosts))
+        timing['completed_flows'] = sum(progress)
+        return timing
     except KeyboardInterrupt:
         print('\nInterrupted; stopping clients, captures, and servers...')
         raise
@@ -248,7 +302,8 @@ def flowGenerator(network, port, flowsPerPair):
 
         # SIGINT lets tshark flush a valid pcap trailer.
         stopManagedProcesses(captureProcesses, 'INT')
-        time.sleep(0.5)
+        if captureProcesses:
+            time.sleep(0.5)
         stopManagedProcesses(serverProcesses, 'TERM')
 
 
@@ -269,14 +324,14 @@ def startServer(serverHosts, port):
     return processes
 
 
-def startClient(clientHosts, flowsPerPair, clientIndex, seed):
+def startClient(clientHosts, flowsPerPair, clientIndex, seed, loadMbps=900):
     logPath = 'log_%s.txt' % clientIndex
     command = (
-        'TrafficGenerator/bin/client -b 900 '
+        'TrafficGenerator/bin/client -b %s '
         '-c TrafficGenerator/conf/client%s_config.txt -n %s '
         '-l flows_%s.txt -s %s -m %s -v > %s 2>&1; '
         'client_rc=$?; echo CLIENT_EXIT_CODE $client_rc >> %s' %
-        (clientIndex, flowsPerPair, clientIndex, seed,
+        (loadMbps, clientIndex, flowsPerPair, clientIndex, seed,
          MAX_CONNECTIONS_PER_SERVER, logPath, logPath))
     clientHosts[clientIndex].cmd(command)
 

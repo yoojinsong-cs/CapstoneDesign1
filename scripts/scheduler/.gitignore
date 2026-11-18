@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+kernel/*.o
+kernel/*.ko
+kernel/*.mod
+kernel/*.mod.c
+kernel/.*.cmd
+kernel/Module.symvers
+kernel/modules.order

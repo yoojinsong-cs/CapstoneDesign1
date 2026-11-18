@@ -33,7 +33,7 @@ struct flow_metadata
 /* listener threads do not need pthread's multi-megabyte default stack */
 #define TG_THREAD_STACK_SIZE (256 << 10)
 /* fail a dead/unserviced connection instead of waiting forever */
-#define TG_SOCKET_TIMEOUT_SEC 120
+#define TG_SOCKET_TIMEOUT_SEC 300
 /* default goodput / link capacity ratio */
 #define TG_GOODPUT_RATIO (1448.0 / (1500 + 14 + 4 + 8 + 12))
 

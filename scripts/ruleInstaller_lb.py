@@ -1,85 +1,118 @@
-"""A simple rule installer to install flow/group rules for the topology built by topoBuilder_lb.py.
-   Flow rules include:
-        arp traffic flooding rules
-        ip forwarding rules
-        ip multipath routing rules (using default OVS select group / ECMP)
+"""IPv4 ECMP rules and loop-free ARP for the project's Clos topology."""
 
-   Uses default OVS with standard OpenFlow13 'select' group type."""
+from collections import deque
+import shlex
+import subprocess
 
-import os
 
-def _cmd(cmd):
-    """Run an ovs-ofctl command."""
-    os.system(cmd)
+def _cmd(command):
+    subprocess.run(shlex.split(command), check=True)
 
-def ruleInstaller(network, server, client, serverEdge, clientEdge, paths):
 
-    core = paths
+def network_neighbors(network):
+    graph = {node.name: {} for node in network.hosts + network.switches}
+    for link in network.links:
+        a, b = link.intf1, link.intf2
+        graph[a.node.name][b.node.name] = a.node.ports[a]
+        graph[b.node.name][a.node.name] = b.node.ports[b]
+    return graph
 
-    # --- Core switches ---
-    for i in range(1, core + 1):
-        _cmd('ovs-ofctl add-flow core%s arp,actions=flood' % i)
-        for j in range(1, server + 1):
-            for k in range(1, client + 1):
-                _cmd('ovs-ofctl add-flow core%s ip,in_port=1,nw_src=20.0.0.%s,nw_dst=20.0.1.%s,actions=output:2' % (i, j, k))
-                _cmd('ovs-ofctl add-flow core%s ip,in_port=2,nw_src=20.0.1.%s,nw_dst=20.0.0.%s,actions=output:1' % (i, k, j))
 
-    # --- Server host-side edge switches (Hedges) ---
-    for i in range(1, 2):
-        _cmd('ovs-ofctl add-flow Hedges%s arp,actions=flood' % i)
-        for j in range(1, server + 1):
-            _cmd('ovs-ofctl add-flow Hedges%s ip,nw_dst=20.0.1.%s,actions=output:%s' % (i, j, i + server))
-            _cmd('ovs-ofctl add-flow Hedges%s ip,nw_dst=20.0.0.%s,actions=output:%s' % (i, j, j))
+def fixed_path_rules(graph):
+    """Pin each IP pair to the same full path across diagnostic policy runs."""
+    servers = sorted(n for n in graph if n.startswith('server'))
+    clients = sorted(n for n in graph if n.startswith('client'))
+    server_edges = sorted(n for n in graph if n.startswith('Edges'))
+    client_edges = sorted(n for n in graph if n.startswith('Edgec'))
+    cores = sorted(n for n in graph if n.startswith('core'))
+    commands = []
+    for source in servers:
+        for destination in clients:
+            index = (int(source[6:]) - 1) * len(clients) + int(destination[6:]) - 1
+            path = [source, 'Hedges1', server_edges[index % len(server_edges)],
+                    cores[index % len(cores)], client_edges[index % len(client_edges)],
+                    'Hedgec1', destination]
+            src_ip, dst_ip = '20.0.0.' + source[6:], '20.0.1.' + destination[6:]
+            for previous, node, following in zip(path, path[1:], path[2:]):
+                for a, b, target in ((src_ip, dst_ip, following), (dst_ip, src_ip, previous)):
+                    commands.append('ovs-ofctl add-flow %s priority=40000,ip,nw_src=%s,nw_dst=%s,actions=output:%d' %
+                                    (node, a, b, graph[node][target]))
+    return commands
 
-    # --- Client host-side edge switches (Hedgec) ---
-    for i in range(1, 2):
-        _cmd('ovs-ofctl add-flow Hedgec%s arp,actions=flood' % i)
-        for j in range(1, client + 1):
-            _cmd('ovs-ofctl add-flow Hedgec%s ip,nw_dst=20.0.0.%s,actions=output:%s' % (i, j, i + client))
-            _cmd('ovs-ofctl add-flow Hedgec%s ip,nw_dst=20.0.1.%s,actions=output:%s' % (i, j, j))
 
-    # --- Server-side edge switches: downlink (Edges) ---
-    for i in range(1, serverEdge + 1):
-        _cmd('ovs-ofctl add-flow Edges%s arp,actions=flood' % i)
-        for j in range(1, server + 1):
-            _cmd('ovs-ofctl add-flow Edges%s ip,nw_dst=20.0.0.%s,actions=output:%s' % (i, j, i + paths))
+def build_rules(graph, *, fixed_paths=False):
+    """Resolve actual port numbers, supporting unequal host and edge counts."""
+    tree = {name: set() for name in graph}
+    visited = {'Hedges1'}
+    pending = deque(['Hedges1'])
+    while pending:
+        source = pending.popleft()
+        for destination in sorted(graph[source]):
+            if destination in visited:
+                continue
+            visited.add(destination)
+            tree[source].add(destination)
+            tree[destination].add(source)
+            pending.append(destination)
+    if visited != set(graph):
+        raise ValueError('topology must be connected')
 
-    # --- Client-side edge switches: downlink (Edgec) ---
-    for i in range(1, clientEdge + 1):
-        _cmd('ovs-ofctl add-flow Edgec%s arp,actions=flood' % i)
-        for j in range(1, client + 1):
-            _cmd('ovs-ofctl add-flow Edgec%s ip,nw_dst=20.0.1.%s,actions=output:%s' % (i, j, i + paths))
+    commands = []
+    for name, peers in graph.items():
+        if name.startswith(('server', 'client')):
+            continue
+        commands.append('ovs-ofctl add-flow %s priority=1,actions=drop' % name)
+        for incoming, port in peers.items():
+            outputs = [peers[peer] for peer in sorted(tree[name]) if peer != incoming]
+            action = ','.join('output:%d' % number for number in outputs)
+            if incoming not in tree[name] or not outputs:
+                action = 'drop'
+            commands.append('ovs-ofctl add-flow %s arp,in_port=%d,actions=%s' %
+                            (name, port, action))
 
-    # --- Group rules: standard OVS select (ECMP, equal-weight) ---
+        group_id = 0
 
-    group_id = 1
+        def route(prefix, targets):
+            nonlocal group_id
+            ports = [peers[peer] for peer in sorted(peers) if peer.startswith(targets)]
+            if not ports:
+                raise ValueError('no next hop for %s on %s' % (prefix, name))
+            if len(ports) == 1:
+                action = 'output:%d' % ports[0]
+            else:
+                group_id += 1
+                buckets = ','.join('bucket=bucket_id:%d,output:%d' % (i + 1, port)
+                                   for i, port in enumerate(ports))
+                commands.append('ovs-ofctl add-group %s group_id=%d,type=select,%s' %
+                                (name, group_id, buckets))
+                action = 'group:%d' % group_id
+            commands.append('ovs-ofctl add-flow %s ip,nw_dst=%s,actions=%s' %
+                            (name, prefix, action))
 
-    # Server-side edge: select group
-    for i in range(1, serverEdge + 1):
-        buckets = ','.join(
-            'bucket=bucket_id:%s,output:%s' % (j + 1, j + 1)
-            for j in range(paths)
-        )
-        _cmd('ovs-ofctl add-group Edges%s group_id=%s,type=select,%s' % (i, group_id, buckets))
-        group_id += 1
+        if name.startswith(('Hedges', 'Hedgec')):
+            host_prefix, subnet, uplinks = (('server', '20.0.0.', 'Edges')
+                                            if name.startswith('Hedges') else
+                                            ('client', '20.0.1.', 'Edgec'))
+            for peer, port in peers.items():
+                if peer.startswith(host_prefix):
+                    address = subnet + str(int(peer[len(host_prefix):]))
+                    commands.append('ovs-ofctl add-flow %s ip,nw_dst=%s,actions=output:%d' %
+                                    (name, address, port))
+            route('20.0.1.0/24' if host_prefix == 'server' else '20.0.0.0/24', uplinks)
+        elif name.startswith('Edges'):
+            route('20.0.0.0/24', 'Hedges')
+            route('20.0.1.0/24', 'core')
+        elif name.startswith('Edgec'):
+            route('20.0.1.0/24', 'Hedgec')
+            route('20.0.0.0/24', 'core')
+        elif name.startswith('core'):
+            route('20.0.0.0/24', 'Edges')
+            route('20.0.1.0/24', 'Edgec')
+    if fixed_paths:
+        commands.extend(fixed_path_rules(graph))
+    return commands
 
-    # Client-side edge: select group
-    for i in range(1, clientEdge + 1):
-        buckets = ','.join(
-            'bucket=bucket_id:%s,output:%s' % (j + 1, j + 1)
-            for j in range(paths)
-        )
-        _cmd('ovs-ofctl add-group Edgec%s group_id=%s,type=select,%s' % (i, group_id, buckets))
-        group_id += 1
 
-    # --- Flow rules that forward uplink traffic to the select group ---
-
-    group_id = 1
-
-    for i in range(1, serverEdge + 1):
-        _cmd('ovs-ofctl add-flow Edges%s ip,in_port=%s,actions=group:%s' % (i, i + paths, group_id))
-        group_id += 1
-
-    for i in range(1, clientEdge + 1):
-        _cmd('ovs-ofctl add-flow Edgec%s ip,in_port=%s,actions=group:%s' % (i, i + paths, group_id))
-        group_id += 1
+def ruleInstaller(network, server, client, serverEdge, clientEdge, paths, *, fixed_paths=False):
+    for command in build_rules(network_neighbors(network), fixed_paths=fixed_paths):
+        _cmd(command)

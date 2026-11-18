@@ -6,7 +6,7 @@
    Client side network is 20.0.1.0/24
 
    All stages can be multipath.
-   Edge <-> Core link bandwidths are fixed to 10Mbps.
+   Edge <-> Core links default to 10Mbps; experiment callers can override them.
    Host <-> Edge link bandwidths are fixed to 1000Mbps.
 
    Uses default OVS with OVSController."""
@@ -16,7 +16,18 @@ from mininet.topo import Topo
 from mininet.link import TCLink
 from mininet.node import OVSController
 
-def topoBuilder(server, client, serverEdge, clientEdge, serverHostEdge, clientHostEdge, paths):
+
+CONTROLLER_PORT = 6654
+
+
+def projectController(name, **kwargs):
+    """Start Mininet's local controller away from the system service on 6653."""
+    kwargs.setdefault('port', CONTROLLER_PORT)
+    return OVSController(name, **kwargs)
+
+
+def topoBuilder(server, client, serverEdge, clientEdge, serverHostEdge, clientHostEdge, paths,
+                *, edge_core_mbps=10):
     class topo(Topo):
         serverList = []
         clientList = []
@@ -32,13 +43,13 @@ def topoBuilder(server, client, serverEdge, clientEdge, serverHostEdge, clientHo
             # Make server hosts
             for i in range(1, server + 1):
                 self.serverList.append(self.addHost('server%s' % i,
-                    mac='00:00:00:00:00:%s' % str(i).zfill(2),
+                    mac='00:00:00:00:00:%02x' % i,
                     ip='20.0.0.%s' % i))
 
             # Make client hosts
             for i in range(1, client + 1):
                 self.clientList.append(self.addHost('client%s' % i,
-                    mac='00:00:00:00:01:%s' % str(i).zfill(2),
+                    mac='00:00:00:00:01:%02x' % i,
                     ip='20.0.1.%s' % i))
 
             # Make server-side edge switches
@@ -71,7 +82,8 @@ def topoBuilder(server, client, serverEdge, clientEdge, serverHostEdge, clientHo
                 for j in range(client):
                     self.addLink(self.clientHostEdgeList[i], self.clientList[j], bw=1000)
 
-            baseBw = 10
+            # Normal runs retain 10Mbps; the experiment supplies its fixed rate.
+            baseBw = edge_core_mbps
 
             # Add serverEdge-core links
             for i in range(serverEdge):
@@ -98,5 +110,6 @@ def topoBuilder(server, client, serverEdge, clientEdge, serverHostEdge, clientHo
                     serverHostEdge=serverHostEdge, clientHostEdge=clientHostEdge,
                     core=paths)
 
-    network = Mininet(topo=topology, controller=OVSController, link=TCLink)
+    network = Mininet(topo=topology, controller=projectController, link=TCLink)
+    network.edge_core_mbps = edge_core_mbps
     return network

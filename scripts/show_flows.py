@@ -1,4 +1,4 @@
-"""Show how a pcap splits into flows (same rule as pcap2csv.py: each request starts a new flow).
+"""Inspect TCP connections and logical flows in a TrafficGenerator capture.
 
 usage:
   python3 show_flows.py <pcap>                  connections -> flows tree (first 10 connections)
@@ -6,15 +6,18 @@ usage:
   python3 show_flows.py <pcap> <stream> <port>  (server port, default 5001)
 """
 import sys
-from pcap2csv import tshark
+from export_packet_headers import tshark_rows
 
 def main(pcap, stream=None, port=5001):
     flt = 'tcp.port==%d && tcp.len>0' % port + ('' if stream is None else ' && tcp.stream==%s' % stream)
-    pkts = tshark(pcap, flt, ['frame.number', 'frame.time_relative', 'tcp.stream', 'tcp.srcport', 'tcp.len', 'tcp.payload'])
+    pkts = tshark_rows(pcap, flt)
 
     seen = set()
     conns = {}  # stream -> list of flows; a flow = (id, size, packets)
-    for fn, t, st, sport, ln, payload in pkts:
+    for row in pkts:
+        fn, t, st, sport, ln, payload = (row[field] for field in (
+            'frame.number', 'frame.time_relative', 'tcp.stream',
+            'tcp.srcport', 'tcp.len', 'tcp.payload'))
         if int(sport) != port and int(ln) == 16:  # request from client
             b = bytes.fromhex(payload)
             fid = int.from_bytes(b[0:4], 'little')

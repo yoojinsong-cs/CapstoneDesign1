@@ -10,6 +10,7 @@
 #include <arpa/inet.h>
 #include <sys/time.h>
 #include <pthread.h>
+#include <time.h>
 
 #include "../common/common.h"
 #include "../common/cdf.h"
@@ -30,6 +31,15 @@ unsigned int num_flows_finished = 0;  /* completed flows across all servers */
 unsigned int last_progress_percent = 0;
 bool generation_failed = false;
 pthread_mutex_t progress_lock = PTHREAD_MUTEX_INITIALIZER;
+unsigned long long first_request_ns = 0;
+unsigned long long last_completion_ns = 0;
+
+static unsigned long long monotonic_ns(void)
+{
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (unsigned long long)now.tv_sec * 1000000000ULL + now.tv_nsec;
+}
 
 /* per-server variables */
 unsigned int num_server = 0;    /* total number of servers */
@@ -689,6 +699,11 @@ void *listen_connection(void *ptr)
                progress while the client output itself remains in a log. */
             pthread_mutex_lock(&progress_lock);
             num_flows_finished++;
+            unsigned long long completed_ns = monotonic_ns();
+            if (completed_ns > last_completion_ns)
+                last_completion_ns = completed_ns;
+            if (num_flows_finished == req_total_num)
+                printf("FLOW_TIMING_NS %llu %llu\n", first_request_ns, last_completion_ns);
             unsigned int progress_percent = (unsigned int)
                 (((unsigned long long)num_flows_finished * 100) / req_total_num);
             if (progress_percent > last_progress_percent ||
@@ -796,6 +811,10 @@ bool run_request(unsigned int req_id)
 
     /* Send request and record start time */
     gettimeofday(&req_start_time[req_id], NULL);
+    pthread_mutex_lock(&progress_lock);
+    if (!first_request_ns)
+        first_request_ns = monotonic_ns();
+    pthread_mutex_unlock(&progress_lock);
     sockfd = node->sockfd;
     if (!write_flow_req(sockfd, &flow))
     {

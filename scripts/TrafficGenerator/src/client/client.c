@@ -22,6 +22,7 @@ char config_file_name[80] = {0};    /* configuration file */
 char dist_file_name[80] = {0};  /* flow size distribution file */
 char fct_log_name[80] = "flows.txt";    /* default log file */
 int seed = 0;   /* random seed */
+int early_exit_sec = -1; /* capture-only exit; default waits for completion */
 char result_script_name[80] = {0};  /* script file to parse final results */
 unsigned int usleep_overhead_us = 0;    /* usleep overhead in microsecond */
 struct timeval tv_start, tv_end;    /* start and end time of traffic */
@@ -57,6 +58,14 @@ unsigned int *rate_value = NULL;
 unsigned int *rate_prob = NULL;
 unsigned int rate_prob_total = 0;
 
+/* app type mix: "app_mix <max_size> <w_bulk> <w_login> <w_stream>", rows in ascending max_size.
+   A flow takes the first row with size <= max_size (sizes above every row use the last row).
+   No rows -> every flow is bulk (original behavior). */
+#define MAX_APP_MIX 16
+unsigned int num_app_mix = 0;
+unsigned int app_mix[MAX_APP_MIX][4];
+unsigned int app_values[3] = {TG_APP_BULK, TG_APP_LOGIN, TG_APP_STREAM};
+
 double load = -1;   /* network load (Mbps) */
 unsigned int req_total_num = 0; /* total number of requests to generate */
 unsigned int req_total_time = 0;    /* total time to generate requests (in seconds) */
@@ -67,6 +76,7 @@ unsigned int period_us; /* average request arrival interval (in microseconds) */
 unsigned int *req_size = NULL;  /* flow size (in bytes) */
 unsigned int *req_server_id = NULL; /* server ID */
 unsigned int *req_dscp = NULL;  /* DSCP of flow */
+unsigned int *req_app = NULL; /* app sending pattern */
 unsigned int *req_rate = NULL;  /* sending rate of flow */
 unsigned int *req_sleep_us = NULL;  /* sleep time interval */
 struct timeval *req_start_time; /* start time of flow */
@@ -181,6 +191,15 @@ int main(int argc, char *argv[])
     gettimeofday(&tv_start, NULL);
     run_requests();
 
+    /* every request is on the wire; give the last flows time to send their first packets, then stop */
+    if (early_exit_sec >= 0 && !generation_failed)
+    {
+        printf("All requests sent. Exit in %d s without waiting for flows to finish\n", early_exit_sec);
+        fflush(stdout);
+        sleep(early_exit_sec);
+        exit(EXIT_SUCCESS);
+    }
+
     /* close existing connections */
     printf("===========================================\n");
     printf("Exit connections\n");
@@ -225,6 +244,7 @@ void print_usage(char *program)
     printf("-t <time>       time in seconds (instead of -n)\n");
     printf("-l <file>       log file with flow completion times (default %s)\n", fct_log_name);
     printf("-s <seed>       seed to generate random numbers (default current time)\n");
+    printf("-e <seconds>    capture-only exit delay after last request (no FCT log)\n");
     printf("-m <number>     maximum connections per server (default %u)\n", TG_PAIR_MAX_CONN);
     printf("-r <file>       python script to parse result files\n");
     printf("-v              give more detailed output (verbose)\n");
@@ -331,6 +351,20 @@ void read_args(int argc, char *argv[])
             else
             {
                 printf("Cannot read seed value\n");
+                print_usage(argv[0]);
+                exit(EXIT_FAILURE);
+            }
+        }
+        else if (strlen(argv[i]) == 2 && strcmp(argv[i], "-e") == 0)
+        {
+            if (i+1 < argc && atoi(argv[i+1]) >= 0)
+            {
+                early_exit_sec = atoi(argv[i+1]);
+                i += 2;
+            }
+            else
+            {
+                printf("Cannot read early exit seconds\n");
                 print_usage(argv[0]);
                 exit(EXIT_FAILURE);
             }
@@ -552,6 +586,22 @@ void read_config(char *file_name)
                 printf("Rate: %uMbps, Prob: %u\n", rate_value[num_rate], rate_prob[num_rate]);
             num_rate++;
         }
+        else if (!strcmp(key, "app_mix"))
+        {
+            if (num_app_mix >= MAX_APP_MIX)
+                error("Too many app_mix rows");
+            unsigned int *r = app_mix[num_app_mix];
+            if (sscanf(line, "%79s %u %u %u %u", key, &r[0], &r[1], &r[2], &r[3]) != 5
+                || r[1] + r[2] + r[3] == 0
+                || (num_app_mix > 0 && r[0] <= app_mix[num_app_mix - 1][0]))
+            {
+                cleanup();
+                error("Invalid app_mix line (max 16 rows, ascending max_size, weights not all 0)");
+            }
+            if (verbose_mode)
+                printf("App mix: size <= %u -> bulk %u, login %u, stream %u\n", r[0], r[1], r[2], r[3]);
+            num_app_mix++;
+        }
     }
 
     fclose(fd);
@@ -614,11 +664,12 @@ void set_req_variables()
     req_server_id = (unsigned int*)calloc(req_total_num, sizeof(unsigned int));
     req_dscp = (unsigned int*)calloc(req_total_num, sizeof(unsigned int));
     req_rate = (unsigned int*)calloc(req_total_num, sizeof(unsigned int));
+    req_app = (unsigned int*)calloc(req_total_num, sizeof(unsigned int));
     req_sleep_us = (unsigned int*)calloc(req_total_num, sizeof(unsigned int));
     req_start_time = (struct timeval*)calloc(req_total_num, sizeof(struct timeval));
     req_stop_time = (struct timeval*)calloc(req_total_num, sizeof(struct timeval));
 
-    if (!req_size || !req_server_id || !req_dscp || !req_rate || !req_sleep_us || !req_start_time || !req_stop_time)
+    if (!req_size || !req_server_id || !req_dscp || !req_rate || !req_app || !req_sleep_us || !req_start_time || !req_stop_time)
     {
         cleanup();
         error("Error: calloc per-request variables");
@@ -631,6 +682,13 @@ void set_req_variables()
         server_req_count[req_server_id[i]]++;   /* per-server request number */
         req_dscp[i] = gen_value_weight(dscp_value, dscp_prob, num_dscp, dscp_prob_total);    /* flow DSCP */
         req_rate[i] = gen_value_weight(rate_value, rate_prob, num_rate, rate_prob_total);   /* flow sending rate */
+        if (num_app_mix > 0)    /* app type, drawn from the row that matches the flow size */
+        {
+            unsigned int j = 0;
+            while (j + 1 < num_app_mix && req_size[i] > app_mix[j][0])
+                j++;
+            req_app[i] = gen_value_weight(app_values, &app_mix[j][1], 3, app_mix[j][1] + app_mix[j][2] + app_mix[j][3]);
+        }
         req_sleep_us[i] = poission_gen_interval(1.0/period_us); /* sleep interval based on poission process */
 
         req_size_total += req_size[i];
@@ -776,6 +834,7 @@ bool run_request(unsigned int req_id)
     flow.size = req_size[req_id];
     flow.tos = req_dscp[req_id] << 2;   /* ToS = DSCP * 4 */
     flow.rate = req_rate[req_id];
+    flow.app = req_app[req_id];
 
     /* Reserve an idle connection atomically.  At the cap, wait for a flow to
        finish instead of creating one thread/socket for every queued flow. */
@@ -866,6 +925,7 @@ void exit_connection(struct conn_node *node)
     flow.size = 100;
     flow.tos = 0;
     flow.rate = 0;
+    flow.app = TG_APP_BULK;
 
     if (!node)
         return;
@@ -941,6 +1001,7 @@ void cleanup()
     free(req_server_id);
     free(req_dscp);
     free(req_rate);
+    free(req_app);
     free(req_sleep_us);
     free(req_start_time);
     free(req_stop_time);

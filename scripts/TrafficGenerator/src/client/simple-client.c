@@ -36,6 +36,7 @@ int main(int argc, char *argv[])
     flow.size = 1024;  /* flow size in bytes */
     flow.tos = 0;  /* ToS value of flows */
     flow.rate = 0;  /* sending rate of flows */
+    flow.app = TG_APP_BULK;
 
     read_args(argc,argv);
 

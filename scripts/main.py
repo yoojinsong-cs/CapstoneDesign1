@@ -88,6 +88,11 @@ if __name__ == '__main__':
     for name in ('server', 'client', 'serverEdge', 'clientEdge', 'paths',
                  'port', 'flowsPerPair'):
         parser.add_argument(name, type=int)
+    parser.add_argument('clue', type=float, nargs='?', default=None,
+                        help='optional app/size correlation 0..1; omitted uses bulk traffic')
+    parser.add_argument('dist', nargs='?', choices=('VL2', 'DCTCP', 'FB'), default=None)
+    parser.add_argument('--early-exit-seconds', type=int, default=-1,
+                        help='capture-only exit delay after requests; default waits for completion')
     parser.add_argument('--scheduler', choices=('legacy', 'fifo', 'fair', 'priority'),
                         default='legacy', help='switch egress scheduler (default: legacy)')
     parser.add_argument('--classifier-delay', type=float, default=DEFAULT_CLASSIFIER_DELAY)
@@ -95,9 +100,18 @@ if __name__ == '__main__':
     parser.add_argument('--seed', type=int, default=None)
     parser.add_argument('--load-mbps', type=float, default=900,
                         help='requested offered load per client')
-    parser.add_argument('--cdf', default=FLOW_SIZE_CDF_PATH)
+    parser.add_argument('--cdf', default=None)
     parser.add_argument('--run-dir', help='new directory for this experiment and FCT logs')
     args = parser.parse_args()
+    if args.dist is not None and args.cdf is not None:
+        parser.error('choose either dist or --cdf')
+    args.cdf = args.cdf or ('TrafficGenerator/conf/%s_CDF.txt' % args.dist if args.dist else FLOW_SIZE_CDF_PATH)
+    if args.clue is not None and (not math.isfinite(args.clue) or not 0 <= args.clue <= 1):
+        parser.error('clue must be between 0 and 1')
+    if args.early_exit_seconds < -1:
+        parser.error('--early-exit-seconds must be -1 or nonnegative')
+    if args.scheduler != 'legacy' and args.early_exit_seconds >= 0:
+        parser.error('scheduler experiments require completed flows; omit --early-exit-seconds')
     scheduled = args.scheduler != 'legacy'
     if min(args.server, args.client, args.serverEdge, args.clientEdge, args.paths,
            args.flowsPerPair) < 1 or max(args.server, args.client) > 254 or not 1 <= args.port <= 65535:
@@ -153,13 +167,16 @@ if __name__ == '__main__':
         flowGenerator(
             network, port, flowsPerPair, cdfPath=args.cdf,
             baseSeed=args.seed, loadMbps=args.load_mbps,
-            healthCheck=switchScheduler.check if switchScheduler else None)
+            healthCheck=switchScheduler.check if switchScheduler else None,
+            clue=args.clue, earlyExitSec=args.early_exit_seconds)
         if switchScheduler:
             switchScheduler.check()
         resultDirectory = schedulerDirectory if scheduled else args.run_dir
         if resultDirectory:
             for index in range(client):
                 for source in ('flows_%s.txt' % index, 'log_%s.txt' % index):
+                    if source.startswith('flows_') and args.early_exit_seconds >= 0:
+                        continue
                     shutil.copy2(source, os.path.join(resultDirectory, source))
             for switch in network.switches:
                 snapshot = subprocess.check_output(

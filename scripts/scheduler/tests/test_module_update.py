@@ -30,10 +30,10 @@ class ModuleUpdateTests(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def modinfo(self, argv, **kwargs):
-        return os.uname().release if argv[2] == 'vermagic' else '3\n'
+        return os.uname().release if argv[2] == 'vermagic' else '4\n'
 
     def test_current_loaded_policy_is_reused(self):
-        (self.loaded / 'version').write_text('3\n')
+        (self.loaded / 'version').write_text('4\n')
         with patch('scheduler.installer.subprocess.run') as command:
             ensure_module(5001)
         command.assert_not_called()

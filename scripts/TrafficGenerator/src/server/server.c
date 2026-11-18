@@ -170,7 +170,10 @@ void* handle_connection(void* ptr)
 {
     struct flow_metadata flow;
     int sockfd = *(int*)ptr;
+    int nodelay = 1;
     free(ptr);
+    if (setsockopt(sockfd, IPPROTO_TCP, TCP_NODELAY, &nodelay, sizeof(nodelay)) < 0)
+        perror("Error: set TCP_NODELAY");
 
     while (1)
     {

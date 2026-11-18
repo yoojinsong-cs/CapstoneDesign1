@@ -5,7 +5,7 @@
 
 Mininet OVS의 `Edges1 → core들` 출력 포트마다 기존 HTB 속도제어
 클래스 아래에 `flowprio` 커널 leaf qdisc를 설치한다.
-TrafficGenerator의 TCP 연결 재사용과 16바이트 메타데이터 형식은 유지한다.
+TrafficGenerator의 TCP 연결 재사용을 유지하며, 메타데이터는 원격 KTH의 앱 필드를 포함한 20바이트(`id, size, tos, rate, app`)로 통일한다. v4 모듈은 앱 필드를 흐름 본문으로 세지 않으며, DRR 및 우선순위 선택 방식은 v3와 같다.
 `main.py --scheduler priority`가 설치·분류 프로세스·종료 정리를 연결한다.
 기존 명령의 기본값은 `legacy`이므로 옵션 없이 실행한 실험은 이전 방식이다.
 
@@ -100,7 +100,7 @@ datapath를 지원한다. 큐는 모든 서버 엣지의 코어 방향 출력 �
   우선순위 갱신은 `(ifindex, cookie)`를 사용해 오래된 결과의 오적용을 막는다.
 - 서버 응답의 메타데이터에서 ID와 크기를 읽는다. 크기는 sequence 경계 추적에
   사용하고, 우선순위 결정에는 분류 결과만 사용한다.
-- 분할된 16바이트 메타데이터와 out-of-order 조각을 누적하고, 재전송은 기존
+- 분할된 20바이트 메타데이터와 out-of-order 조각을 누적하고, 재전송은 기존
   sequence 범위로 식별한다. 기존 연결의 다음 요청은 새로운 논리적 큐다.
 - TCP sequence wrap을 처리한다. 현재 지원하는 개별 flow size는 2GiB 미만이며
   포함된 CDF들의 최대 크기 1GB는 이 범위에 들어간다.

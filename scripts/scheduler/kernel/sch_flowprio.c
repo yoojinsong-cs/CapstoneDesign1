@@ -22,7 +22,7 @@
 #include <net/net_namespace.h>
 #endif
 
-#define FP_META 16
+#define FP_META 20 /* TrafficGenerator: id, size, tos, rate, app (five u32s) */
 #define FP_MAX_FLOWS 32768
 #define FP_MAX_CONNS 4096
 #define FP_HISTORY_NS (30ULL * NSEC_PER_SEC)
@@ -42,7 +42,7 @@ struct fp_flow {
 	u64 cookie, first_ns, last_seen, wait_ns, sent, max_wait;
 	u32 start, end, id, size, queued_bytes, queued_packets;
 	s32 deficit;
-	u16 meta_mask;
+	u32 meta_mask;
 	u8 meta[FP_META], kind, band;
 	bool parsed, retired;
 };
@@ -236,7 +236,7 @@ static struct fp_flow *fp_track(struct fp_sched *q, struct sk_buff *skb, u64 now
 						   &f->meta[i], 1))
 					f->meta_mask |= 1U << i;
 			}
-			if (f->meta_mask == 0xffff) {
+			if (f->meta_mask == ((1U << FP_META) - 1)) {
 				f->id = get_unaligned_le32(f->meta);
 				f->size = get_unaligned_le32(f->meta + 4);
 				/* Generator uses 32-bit size; limit intervals to signed
@@ -563,6 +563,6 @@ static void __exit fp_module_exit(void)
 module_init(fp_module_init);
 module_exit(fp_module_exit);
 MODULE_LICENSE("GPL");
-MODULE_VERSION("3");
+MODULE_VERSION("4");
 MODULE_DESCRIPTION("Work-conserving TrafficGenerator flow.id scheduler below an external shaper");
 #endif

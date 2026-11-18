@@ -1,6 +1,7 @@
 """Generate flows using the TrafficGenerator tool.
    https://github.com/HKUST-SING/TrafficGenerator """
 
+import math
 import multiprocessing
 import os
 import re
@@ -134,9 +135,38 @@ def printIdealRuntimeEstimate(network, clientCount, flowsPerPair,
            formatDuration(idealSeconds)))
 
 
+# app type by flow size, written as client config lines: app_mix <max_size> <w_bulk> <w_login> <w_stream>
+# clue = how much the app type tells about the size (0..1):
+#   0 -> every size bucket gets the same mix (app type says nothing about size)
+#   1 -> small = login, medium = bulk, large (>= elephant) = stream (app type gives the answer away)
+SIZE_BUCKETS = [10000, 1000000, 4294967295]   # small <= 10 KB < medium <= 1 MB < large
+NEUTRAL = [1, 1, 1]                           # bulk, login, stream
+STRONG = [[0, 1, 0], [1, 0, 0], [0, 0, 1]]    # per bucket
+
+def appMixLines (clue):
+    lines = []
+    for bound, strong in zip(SIZE_BUCKETS, STRONG):
+        w = [round(1000 * ((1 - clue) * n / sum(NEUTRAL) + clue * s)) for n, s in zip(NEUTRAL, strong)]
+        lines.append('app_mix %d %d %d %d' % (bound, w[0], w[1], w[2]))
+    return lines
+
+
 def flowGenerator(network, port, flowsPerPair,
                   cdfPath=FLOW_SIZE_CDF_PATH, baseSeed=None, loadMbps=900,
-                  healthCheck=None, capture=True, progressCallback=None):
+                  healthCheck=None, capture=True, progressCallback=None,
+                  clue=None, dist=None, earlyExitSec=-1):
+    if clue is not None and (not math.isfinite(clue) or not 0 <= clue <= 1):
+        raise ValueError('clue must be between 0 and 1')
+    if not isinstance(earlyExitSec, int) or earlyExitSec < -1:
+        raise ValueError('earlyExitSec must be -1 or a nonnegative integer')
+    if dist is not None:
+        if cdfPath != FLOW_SIZE_CDF_PATH:
+            raise ValueError('choose either dist or cdfPath')
+        if dist not in ('VL2', 'DCTCP', 'FB'):
+            raise ValueError('unknown flow size distribution')
+        cdfPath = 'TrafficGenerator/conf/%s_CDF.txt' % dist
+    if not os.path.isfile(cdfPath):
+        raise ValueError('CDF file does not exist: %s' % cdfPath)
     allHosts = network.hosts
     serverHosts = [host for host in allHosts if host.name.startswith('server')]
     clientHosts = [host for host in allHosts if host.name.startswith('client')]
@@ -150,6 +180,8 @@ def flowGenerator(network, port, flowsPerPair,
             'server %s %s' % (serverIp, port),
             'req_size_dist %s' % cdfPath,
         ]
+        if clue is not None:
+            configLines.extend(appMixLines(clue))
         with open('TrafficGenerator/conf/client%s_config.txt' % clientIndex, 'w') as configFile:
             configFile.write('\n'.join(configLines) + '\n')
 
@@ -225,11 +257,14 @@ def flowGenerator(network, port, flowsPerPair,
             logPath = 'log_%s.txt' % clientIndex
             if os.path.exists(logPath):
                 os.remove(logPath)
+            flowLog = 'flows_%s.txt' % clientIndex
+            if os.path.exists(flowLog):
+                os.remove(flowLog)
             seed = baseSeed * 100 + clientIndex + 1
             print('start flows from %s (seed %s)' % (clientHost.name, seed))
             process = multiprocessing.Process(
                 target=startClient,
-                args=(clientHosts, flowsPerPair, clientIndex, seed, loadMbps))
+                args=(clientHosts, flowsPerPair, clientIndex, seed, loadMbps, earlyExitSec))
             process.start()
             clientProcesses.append(process)
 
@@ -277,13 +312,15 @@ def flowGenerator(network, port, flowsPerPair,
             index + 1 for index, count in enumerate(progress)
             if count < flowsPerPair
         ]
-        if failedClients or incompleteClients:
+        if failedClients or (earlyExitSec < 0 and incompleteClients):
             raise RuntimeError(
                 'traffic generation failed; failed clients=%s, unfinished clients=%s. '
                 'See log_N.txt for the exact socket/thread error.' %
                 (failedClients, incompleteClients))
 
         print('client requests done...')
+        if earlyExitSec >= 0:
+            return dict(completed_flows=sum(progress), early_exit_seconds=earlyExitSec)
         timing = readTransferTiming(len(clientHosts))
         timing['completed_flows'] = sum(progress)
         return timing
@@ -324,15 +361,16 @@ def startServer(serverHosts, port):
     return processes
 
 
-def startClient(clientHosts, flowsPerPair, clientIndex, seed, loadMbps=900):
+def startClient(clientHosts, flowsPerPair, clientIndex, seed, loadMbps=900, earlyExitSec=-1):
     logPath = 'log_%s.txt' % clientIndex
     command = (
         'TrafficGenerator/bin/client -b %s '
         '-c TrafficGenerator/conf/client%s_config.txt -n %s '
-        '-l flows_%s.txt -s %s -m %s -v > %s 2>&1; '
+        '-l flows_%s.txt -s %s -m %s %s -v > %s 2>&1; '
         'client_rc=$?; echo CLIENT_EXIT_CODE $client_rc >> %s' %
         (loadMbps, clientIndex, flowsPerPair, clientIndex, seed,
-         MAX_CONNECTIONS_PER_SERVER, logPath, logPath))
+         MAX_CONNECTIONS_PER_SERVER, '-e %d' % earlyExitSec if earlyExitSec >= 0 else '',
+         logPath, logPath))
     clientHosts[clientIndex].cmd(command)
 
     exitCode = 1

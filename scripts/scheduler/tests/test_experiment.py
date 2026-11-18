@@ -79,7 +79,7 @@ class ExperimentTests(unittest.TestCase):
                              ('complete', 4, 4))
             settings = json.loads((output / 'settings.json').read_text())
             self.assertEqual(settings['priority_policy'], 'unknown_mice_first')
-            self.assertEqual(settings['scheduler_policy_version'], '3')
+            self.assertEqual(settings['scheduler_policy_version'], '4')
             self.assertTrue(settings['fixed_paths'])
             self.assertTrue(settings['cdf'].endswith('DCTCP_CDF.txt'))
             self.assertTrue((output / 'qos.csv').exists())

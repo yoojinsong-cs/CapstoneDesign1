@@ -50,7 +50,7 @@ sudo python3 main.py <server#> <client#> <serverEdge#> <clientEdge#> <paths#> <p
 | `port#` | TrafficGenerator 서버 포트 |
 | `flowsPerPair#` | 클라이언트당 플로우 수 |
 
-TrafficGenerator 방식대로 CDF에서 흐름 크기를 뽑고, 모든 흐름을 bulk 전송합니다. 기본 분포는 `VL2_CDF.txt`이며 `--cdf`로 변경할 수 있습니다. 요청 메타데이터는 16바이트이며 앱 패턴이나 `app_mix`는 사용하지 않습니다.
+TrafficGenerator 방식대로 CDF에서 흐름 크기를 뽑고, 모든 흐름을 bulk 전송합니다. 기본 분포는 `VL2_CDF.txt`이며 `--cdf`로 변경할 수 있습니다. 요청 메타데이터는 20바이트(`id, size, tos, rate, app`)입니다. 기본값은 기존 bulk 전송이며, 선택 인자 `clue`(0..1)와 분포 이름으로 원격 KTH의 앱 패턴을 사용할 수 있습니다. 예: `sudo python3 main.py 2 2 1 1 2 5001 50 0.6 DCTCP`. `--early-exit-seconds 30`은 legacy 캡처 실행에서만 조기 종료하며 FCT를 생성하지 않습니다. 스케줄러 실험은 항상 모든 흐름의 완료를 기다립니다.
 
 ### 예시
 
@@ -89,7 +89,7 @@ data/pcap/run_YYYYMMDD_HHMMSS_VL2_1000flows/client2.pcap
 [scheduler/README.md](scheduler/README.md)를 참고하세요.
 
 실험이 만든 PCAP을 패킷 1개당 CSV 1행으로 변환합니다. TCP payload
-본문은 저장하지 않고, 16바이트 요청 메타데이터를 해석해 각 패킷에
+본문은 저장하지 않고, 20바이트 요청 메타데이터를 해석해 각 패킷에
 `flow_id`, `flow_size`, `flow_tos`, `flow_rate`를 연결합니다.
 
 ```bash

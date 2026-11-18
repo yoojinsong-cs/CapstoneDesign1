@@ -6,7 +6,7 @@ usage:
   python3 show_flows.py <pcap> <stream> <port>  (server port, default 5001)
 """
 import sys
-from export_packet_headers import tshark_rows
+from export_packet_headers import parse_metadata, tshark_rows
 
 def main(pcap, stream=None, port=5001):
     flt = 'tcp.port==%d && tcp.len>0' % port + ('' if stream is None else ' && tcp.stream==%s' % stream)
@@ -18,13 +18,13 @@ def main(pcap, stream=None, port=5001):
         fn, t, st, sport, ln, payload = (row[field] for field in (
             'frame.number', 'frame.time_relative', 'tcp.stream',
             'tcp.srcport', 'tcp.len', 'tcp.payload'))
-        if int(sport) != port and int(ln) == 16:  # request from client
-            b = bytes.fromhex(payload)
-            fid = int.from_bytes(b[0:4], 'little')
+        metadata = parse_metadata(payload) if int(ln) in (16, 20) else None
+        if int(sport) != port and metadata is not None:  # request from client
+            fid = metadata['flow_id']
             if fid == 0 or fid in seen:  # close message / retransmitted request
                 continue
             seen.add(fid)
-            conns.setdefault(st, []).append((fid, int.from_bytes(b[4:8], 'little'), []))
+            conns.setdefault(st, []).append((fid, metadata['flow_size'], []))
             conns[st][-1][2].append((fn, t, 'request', ln))
         elif int(sport) == port and conns.get(st):  # server data -> current flow of this connection
             conns[st][-1][2].append((fn, t, 'server', ln))

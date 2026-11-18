@@ -1,7 +1,7 @@
 """Export TCP/IP headers from a TrafficGenerator PCAP to packet-level CSV.
 
 Each CSV row is one captured TCP packet.  Packets are associated with the
-logical TrafficGenerator flow when its 16-byte request metadata is available.
+logical TrafficGenerator flow when its 16- or 20-byte request metadata is available.
 The payload itself is not written to the CSV.
 
 usage:
@@ -175,19 +175,20 @@ def parse_metadata(payload):
         raw = bytes.fromhex(payload)
     except ValueError:
         return None
-    if len(raw) != 16:
+    if len(raw) not in (16, 20):
         return None
     return {
         'flow_id': int.from_bytes(raw[0:4], 'little'),
         'flow_size': int.from_bytes(raw[4:8], 'little'),
         'flow_tos': int.from_bytes(raw[8:12], 'little'),
         'flow_rate': int.from_bytes(raw[12:16], 'little'),
+        'metadata_size': len(raw),
     }
 
 
 def sequence_in_response(sequence, flow, include_end=False):
     offset = (sequence - flow['response_start']) % UINT32_MODULUS
-    response_length = flow['flow_size'] + 16
+    response_length = flow['flow_size'] + flow.get('metadata_size', 16)
     if include_end:
         return offset <= response_length
     return offset < response_length
@@ -265,7 +266,7 @@ def export_headers(pcap, output_path, port=5001, stream=None):
                     direction = 'unknown'
 
                 metadata = None
-                if row['tcp.len'] == '16':
+                if row['tcp.len'] in ('16', '20'):
                     metadata = parse_metadata(row['tcp.payload'])
 
                 flows = flows_by_stream.setdefault(stream_id, [])

@@ -98,5 +98,5 @@ class KernelPolicyTests(unittest.TestCase):
                                UBSAN_OPTIONS='halt_on_error=1')
             result = subprocess.run([binary], env=environment, check=True,
                                     capture_output=True, text=True)
-            self.assertIn('11 actual kernel-source policy/parser tests passed',
+            self.assertIn('12 actual kernel-source policy/parser tests passed',
                           result.stdout)

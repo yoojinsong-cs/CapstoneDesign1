@@ -14,7 +14,7 @@ from pathlib import Path
 from .mock_classifier import DEFAULT_CLASSIFIER_DELAY
 
 
-POLICY_VERSION = '3'
+POLICY_VERSION = '4'
 PRIORITY_POLICY = 'unknown_mice_first'
 MODULE_STATE = Path('/sys/module/sch_flowprio')
 KERNEL_DIRECTORY = Path(__file__).resolve().parent / 'kernel'
